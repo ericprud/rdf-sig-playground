@@ -42,10 +42,11 @@ manu's example:
   privKey: d5GjRrB35YEroMuv2cHotX8V8H57cVUPmohRKFt89mxeD5Bcrbhq3KDxFSN5RKzw4UQGSoJtTCqGMDJJCZ33HsT
   pubKey: Q2K4ftnrexPPBti1PYAQBFYaw4VPcoY7HqLpWd9GXzd
 
-fhir bundle example:
-  sigKind: jws
+fhir bundle (co-signing Provenance):
+  sigKind: fhirProvenance
+  alg: RS256
   signNode: http://hl7.org/fhir/Bundle/signed
-  signGraph: |
+  signGraph: &fhirBundleGraph |
     PREFIX fhir: <http://hl7.org/fhir/>
     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -75,16 +76,65 @@ fhir bundle example:
         fhir:status [ fhir:v "final" ] ;
         fhir:code [ fhir:text [ fhir:v "something" ] ] ;
         fhir:value [ a fhir:Quantity ; fhir:value [ fhir:v "1"^^xsd:decimal ] ] .
-  proofNode: _:proof1
+  proofNode: http://something4
   withProof: |
-    PREFIX dc: <http://purl.org/dc/terms/>
+    PREFIX fhir: <http://hl7.org/fhir/>
     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-    PREFIX sec: <https://w3id.org/security#>
-    _:proof1 a sec:RsaSignature2018 ;
-        dc:created "2025-07-01T08:48:05Z"^^xsd:dateTime ;
-        sec:proofPurpose sec:assertionMethod ;
-        sec:verificationMethod <http://example.org/certificates/ig-publisher-key1> .
+    # Provenance co-signs the Bundle. Its attribution metadata (agent, recorded, reason)
+    # is NOT covered by the signature — only signGraph above is signed.
+    # The rule: strip all Provenance entries whose fhir:target references this Bundle before hashing.
+    <http://something4> a fhir:Provenance ;
+        fhir:id [ fhir:v "prov1" ] ;
+        fhir:target [ fhir:reference [ fhir:v "Bundle/signed" ] ] ;
+        fhir:recorded [ fhir:v "2024-06-09T11:06:35+10:00"^^xsd:dateTime ] ;
+        fhir:agent [
+            fhir:type [
+                fhir:coding ( [
+                    fhir:system [ fhir:v "http://terminology.hl7.org/CodeSystem/v3-ParticipationType"^^xsd:anyURI ] ;
+                    fhir:code [ fhir:v "AUT" ]
+                ] )
+            ] ;
+            fhir:who [ fhir:reference [ fhir:v "Organization/ig-publisher" ] ]
+        ] ;
+        fhir:signature [
+            fhir:type [
+                fhir:coding ( [
+                    fhir:system [ fhir:v "urn:iso-astm:E1762-95:2013"^^xsd:anyURI ] ;
+                    fhir:code [ fhir:v "1.2.840.10065.1.12.1.1" ]
+                ] )
+            ] ;
+            fhir:when [ fhir:v "2024-06-09T11:06:35+10:00"^^xsd:dateTime ] ;
+            fhir:who [ fhir:reference [ fhir:v "Organization/ig-publisher" ] ] ;
+            fhir:targetFormat [ fhir:v "application/fhir+json;canonicalization=http://hl7.org/fhir/canonicalization/json"^^xsd:anyURI ] ;
+            fhir:sigFormat [ fhir:v "application/jose" ]
+        ] .
   keyId: http://example.org/certificates/ig-publisher-key1
   privKey: AQPCaseUYhvQyPjMihbCCDUqZFTQuk2YFiAP4uKQ5e8D825Z7MxPi9vcu1yJRXf25sDrKv7D2e8pbqSTSKYApHzYiW3j5497oXhK1TszFQoWe1VKrQk7eq7J9XYkrSNNzN3hk3LgTXnnrW4RwgTyWe9qrhANo6iEfyw2j4zyRoE76L2A7CkETEv46K9jqRXNcqV9a2aVPtjdkWa7feYgmRotzJdoiYXu2ecHk5WNZfErqybAmW854GXxhJk59CXtcfaQsAr5LLbKfx4G4vunQyjLE93nReVVisrZnsTUsDLVrwrXy7KEupGE39aSbydZnnEuJRWi15PvRHEPYmZRKSb3UeRzzpfsZWL6o5vjj5sVenB95ZGhCm6tffLU3Se3Dpnn2DKHPtGeRUjC1XUrsBngSZAFj7wyT4NSFpUrccBxZUtzMHGxTq7nrs5EMwexGah67XCFjgY5ujMTnvMGdhUfHiRwZt2N9CLbAkJSW3tDWniPyBQkZLwuZ8UPREZqSgsaSJPesbT25h1uwimPHQhZbwqq3zEHqt1VF381GufsAqRrwxYXaScfzXvna8FfxhQ23PdanJf6gNC9fG9mXLonEqbrzq4rFwj3FJDo25rHzoP7vSXwBYoXHhCnYSNCrW5qxRBGLpkF8aA78Zn7zZpw6ZyVP84uXC2eB9RDYEdwth27PsozQkHcLTXoNC1m4EAPMBFcXFzkNJCdPAcn9vfSknQJwvSEt781nF9MUs1ntsDavKR34WwDC6wLTq9zXpRrU24CnAkdqLfuQLWcmkWkn593L4nPSgNxpTKG8i4Nd6B6tgHvXZK6JWBeBWqG1QDacAUQAX2AaisehL1NcrDLvp52BJ5oStBm4jejq3qvgSJMY22ncS6zGiA22NTzXoZcxsQmGeYfthgJNZkggzN9qVfCSgzqJJbZMcpguzhPg7oqZ54V6jZEGB4XSuqhojjrNuTZ223m4c6jZfiSHTe1iaQsoN6XSjpT48UyVZ7NJqDHq2othQ9gPLcsbbKPf7EmZBBtFbcQw97fKziJinmiUtVC1vYYfcLT1gJw8DWruA85TM2e7eVvjByGoBe4PQqdJcetkWtan2WBEZVwW9GTAjs91bNFdcL7UBDEn73FTxTbNnVqEwjPPpCUy7ZnK1JXMHFT2Cie4hEiUGuaUxTYUV8TC5YEzV3S1djAL6hmsp53eJtzh5dVHBFg9drwt5U2dFbFhrrvPJv2ANPfjmfZfgU6kwfzcYAv89BF75Xckshp2Cfxzv4hMXkqa2HFPvfLf3CrqF3w2uCZCtN14RZnhtHLzbx8ikqwMXjEY2r5yCvkJiap8CmPLCKwLKrrQ43HQ6C8xpoYEUcvic5Ay7DmErHzziUEN8iYhUxx3yBQ7NYFb8GZ7MZ9YhPT4vThJLkqYYEU1DnFDQfxmEjyaguh5CfZyFYLDTHeCFynE2fwTCNmXqgdij7RhYXCBFHk9DaM1uVbZqMy56jsvK4cvAT6XRLmUkbgv76jyhXh6LtLzJFeVBQ2hjnpv9kPtMPgw4RZKqu2QaKAzaoWBTeDTWh6xq5KMkFfVaWVvZ45B9aZuoULwvib1X6n2F6x1NPauUhcMRxTzkUUa4ybHCkvrnghK5pAp2qA
   pubKey: 7TkEHftNQpjpqRRvBA9M4aB4TfNbSnB2T9h18pLHPWgrNfjkdkb75sCstxRVXXEPcQmEAM1b5ZkT3tvRxDBYKELReJGyMDiCR2aD44PyBufsRCQ1AFAvC1ekFV9AUxDb6wLvJSFxTQU49TtGY9aF91pat3o65AjqQ16J9UrMGPT48ok8njR11ws8i2fPR72A3Xnv27ysg7P5vHFXWMKBCmGxJhSkX57FZ5ZYZw4wPwqgPLwpR9rDSaQwyzxtqQ3CfKJeZvR6LFarkccUyq9vKFSkMYeqVoMVuQvNLhn4XwWpGLawZYj6KezKoqhZ5G7o5rzjq7foi8YixEYap1fxTPUU5C6xbGByi14sbwAYktmGZWWsKSnoVpjbwEtTfB2TYmjnSGE81RcFYKzHDAx
 
+fhir bundle (directly-signed Bundle):
+  sigKind: fhirBundle
+  alg: RS256
+  signNode: http://hl7.org/fhir/Bundle/signed
+  signGraph: *fhirBundleGraph
+  proofNode: http://hl7.org/fhir/Bundle/signed
+  withProof: |
+    PREFIX fhir: <http://hl7.org/fhir/>
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+    # fhir:signature is attached directly to the Bundle (deprecated in FHIR R5).
+    # Only signGraph above is signed; the signature metadata below is not.
+    <http://hl7.org/fhir/Bundle/signed> fhir:signature [
+        fhir:type [
+            fhir:coding ( [
+                fhir:system [ fhir:v "urn:iso-astm:E1762-95:2013"^^xsd:anyURI ] ;
+                fhir:code [ fhir:v "1.2.840.10065.1.12.1.1" ]
+            ] )
+        ] ;
+        fhir:when [ fhir:v "2024-06-09T11:06:35+10:00"^^xsd:dateTime ] ;
+        fhir:who [ fhir:reference [ fhir:v "Organization/ig-publisher" ] ] ;
+        fhir:targetFormat [ fhir:v "application/fhir+json;canonicalization=http://hl7.org/fhir/canonicalization/json"^^xsd:anyURI ] ;
+        fhir:sigFormat [ fhir:v "application/jose" ]
+    ] .
+  keyId: http://example.org/certificates/ig-publisher-key1
+  privKey: AQPCaseUYhvQyPjMihbCCDUqZFTQuk2YFiAP4uKQ5e8D825Z7MxPi9vcu1yJRXf25sDrKv7D2e8pbqSTSKYApHzYiW3j5497oXhK1TszFQoWe1VKrQk7eq7J9XYkrSNNzN3hk3LgTXnnrW4RwgTyWe9qrhANo6iEfyw2j4zyRoE76L2A7CkETEv46K9jqRXNcqV9a2aVPtjdkWa7feYgmRotzJdoiYXu2ecHk5WNZfErqybAmW854GXxhJk59CXtcfaQsAr5LLbKfx4G4vunQyjLE93nReVVisrZnsTUsDLVrwrXy7KEupGE39aSbydZnnEuJRWi15PvRHEPYmZRKSb3UeRzzpfsZWL6o5vjj5sVenB95ZGhCm6tffLU3Se3Dpnn2DKHPtGeRUjC1XUrsBngSZAFj7wyT4NSFpUrccBxZUtzMHGxTq7nrs5EMwexGah67XCFjgY5ujMTnvMGdhUfHiRwZt2N9CLbAkJSW3tDWniPyBQkZLwuZ8UPREZqSgsaSJPesbT25h1uwimPHQhZbwqq3zEHqt1VF381GufsAqRrwxYXaScfzXvna8FfxhQ23PdanJf6gNC9fG9mXLonEqbrzq4rFwj3FJDo25rHzoP7vSXwBYoXHhCnYSNCrW5qxRBGLpkF8aA78Zn7zZpw6ZyVP84uXC2eB9RDYEdwth27PsozQkHcLTXoNC1m4EAPMBFcXFzkNJCdPAcn9vfSknQJwvSEt781nF9MUs1ntsDavKR34WwDC6wLTq9zXpRrU24CnAkdqLfuQLWcmkWkn593L4nPSgNxpTKG8i4Nd6B6tgHvXZK6JWBeBWqG1QDacAUQAX2AaisehL1NcrDLvp52BJ5oStBm4jejq3qvgSJMY22ncS6zGiA22NTzXoZcxsQmGeYfthgJNZkggzN9qVfCSgzqJJbZMcpguzhPg7oqZ54V6jZEGB4XSuqhojjrNuTZ223m4c6jZfiSHTe1iaQsoN6XSjpT48UyVZ7NJqDHq2othQ9gPLcsbbKPf7EmZBBtFbcQw97fKziJinmiUtVC1vYYfcLT1gJw8DWruA85TM2e7eVvjByGoBe4PQqdJcetkWtan2WBEZVwW9GTAjs91bNFdcL7UBDEn73FTxTbNnVqEwjPPpCUy7ZnK1JXMHFT2Cie4hEiUGuaUxTYUV8TC5YEzV3S1djAL6hmsp53eJtzh5dVHBFg9drwt5U2dFbFhrrvPJv2ANPfjmfZfgU6kwfzcYAv89BF75Xckshp2Cfxzv4hMXkqa2HFPvfLf3CrqF3w2uCZCtN14RZnhtHLzbx8ikqwMXjEY2r5yCvkJiap8CmPLCKwLKrrQ43HQ6C8xpoYEUcvic5Ay7DmErHzziUEN8iYhUxx3yBQ7NYFb8GZ7MZ9YhPT4vThJLkqYYEU1DnFDQfxmEjyaguh5CfZyFYLDTHeCFynE2fwTCNmXqgdij7RhYXCBFHk9DaM1uVbZqMy56jsvK4cvAT6XRLmUkbgv76jyhXh6LtLzJFeVBQ2hjnpv9kPtMPgw4RZKqu2QaKAzaoWBTeDTWh6xq5KMkFfVaWVvZ45B9aZuoULwvib1X6n2F6x1NPauUhcMRxTzkUUa4ybHCkvrnghK5pAp2qA
+  pubKey: 7TkEHftNQpjpqRRvBA9M4aB4TfNbSnB2T9h18pLHPWgrNfjkdkb75sCstxRVXXEPcQmEAM1b5ZkT3tvRxDBYKELReJGyMDiCR2aD44PyBufsRCQ1AFAvC1ekFV9AUxDb6wLvJSFxTQU49TtGY9aF91pat3o65AjqQ16J9UrMGPT48ok8njR11ws8i2fPR72A3Xnv27ysg7P5vHFXWMKBCmGxJhSkX57FZ5ZYZw4wPwqgPLwpR9rDSaQwyzxtqQ3CfKJeZvR6LFarkccUyq9vKFSkMYeqVoMVuQvNLhn4XwWpGLawZYj6KezKoqhZ5G7o5rzjq7foi8YixEYap1fxTPUU5C6xbGByi14sbwAYktmGZWWsKSnoVpjbwEtTfB2TYmjnSGE81RcFYKzHDAx

@@ -18,16 +18,18 @@
     </div>
     <div style="padding: 3ex 0;">
       Use <h2 style="display: inline;">Use</h2>
-      <select id="sigKind"><option value="">- pick one -</option><option value="jws">jws</option><option value="proofValue">proofValue</option></select>
+      <select id="sigKind"><option value="">- pick one -</option><option value="jws">jws</option><option value="proofValue">proofValue</option><option value="fhirProvenance">co-signing Provenance</option><option value="fhirBundle">directly-signed Bundle</option></select>
+      <label for="alg" style="margin-left:1ex;">alg:</label>
+      <input id="alg" style="width:7ex;"></input>
       <h2 style="display: inline;">to sign</h2>
       <input id="signNode" style="width: 32ex;"></input>
       <h2 style="display: inline;">in:</h2>
     </div>
     <textarea id="signGraph" cols=132, rows=8></textarea>
     <div style="padding: 3ex 0;">
-      <h2 style="display: inline;">with proof node</h2>
+      <h2 style="display: inline;">with proof/signature root</h2>
       <input id="proofNode" style="width: 32ex;"></input>
-      <span class="fake-link" title="will be replaced with a fresh bnode">†</span>
+      <span class="fake-link" title="jws/proofValue: replaced with a fresh bnode; fhir*: URI of resource carrying fhir:signature">†</span>
       <h2 style="display: inline;">in:</h2>
     </div>
     <textarea id="withProof" cols=132, rows=8></textarea>
@@ -36,6 +38,7 @@
     <label for="privKey" style="padding-left: 8em;">Base58:</label> <textarea id="privKey" cols=100, rows=1></textarea>
     <div style="padding: 3ex 0;">
       <button id="sign">sign</button>
+      <span id="detectedAlg" style="margin-left: 2ex; color: #555; font-style: italic;"></span>
       <h2 style="display: inline;">produces:</h2>
     </div>
     <textarea id="signed" cols=132, rows=15></textarea>
