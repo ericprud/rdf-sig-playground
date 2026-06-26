@@ -1,11 +1,21 @@
-const {Ed25519KeyPair, jsonld, util, Buffer, jsYaml, base58} = rdfsig;
+const {Ed25519KeyPair, forge, jsonld, util, Buffer, jsYaml, base58} = rdfsig;
 const $ = document.querySelectorAll.bind(document);
 const DefaultManifest = ['examples/toy.yaml'];
 const F = graphy.core.data.factory;
 
 const NS = {
-  sec: 'https://w3id.org/security#',
-}
+  sec:  'https://w3id.org/security#',
+  fhir: 'http://hl7.org/fhir/',
+  rdf:  'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+};
+
+const RDF_TYPE = NS.rdf + 'type';
+
+const ProofTypeInfo = {
+  [NS.sec + 'Ed25519Signature2018']: { keyClass: 'Ed25519', alg: 'EdDSA' },
+  [NS.sec + 'Ed25519Signature2020']: { keyClass: 'Ed25519', alg: 'EdDSA' },
+  [NS.sec + 'RsaSignature2018']:     { keyClass: 'RSA',     alg: 'RS256' },
+};
 
 const SigKinds = {
   jws: {
@@ -47,23 +57,206 @@ $('#signGraph')[0].value = ''; // clear out for error messages
   }
 })
 
-// Example button action.
+// Example button action. Clear alg first so examples without it don't show a stale value.
 function fill (fields) {
-  Object.keys(fields).forEach(
-    id => $('#' + id)[0].value = fields[id]
-  )
+  $('#alg')[0].value = '';
+  Object.keys(fields).forEach(id => {
+    const el = document.querySelector('#' + id);
+    if (el) el.value = fields[id];
+  });
 }
 
-// When sign is clicked...
+// ---------------------------------------------------------------------------
+// Linked-data proof helpers (jws / proofValue)
+// ---------------------------------------------------------------------------
+
+// Detect key class and JWS algorithm from proof rdf:type triple.
+function getProofTypeInfo (dataset, proofNode) {
+  const typeQuads = [...dataset.match(proofNode, F.namedNode(RDF_TYPE), null)];
+  if (typeQuads.length === 0)
+    throw Error('No rdf:type found for proof node');
+  const proofType = typeQuads[0].object.value;
+  const info = ProofTypeInfo[proofType];
+  if (!info)
+    throw Error(`Unknown proof type: ${proofType}`);
+  return { proofType, ...info };
+}
+
+// Build an RS256 (RSASSA-PKCS1-v1_5 + SHA-256) signer from base58 PKCS#1 DER.
+function makeRsaSigner (privKeyBase58) {
+  const privKey = forge.pki.privateKeyFromAsn1(
+    forge.asn1.fromDer(forge.util.createBuffer(base58.decode(privKeyBase58))));
+  return {
+    sign: async ({data}) => {
+      const md = forge.md.sha256.create();
+      md.update(forge.util.binary.raw.encode(data), 'binary');
+      return forge.util.binary.raw.decode(privKey.sign(md));
+    }
+  };
+}
+
+// Build an RS256 verifier from base58 SubjectPublicKeyInfo DER.
+function makeRsaVerifier (pubKeyBase58) {
+  const pubKey = forge.pki.publicKeyFromAsn1(
+    forge.asn1.fromDer(forge.util.createBuffer(base58.decode(pubKeyBase58))));
+  return {
+    verify: async ({data, signature}) => {
+      const md = forge.md.sha256.create();
+      md.update(forge.util.binary.raw.encode(data), 'binary');
+      try {
+        return pubKey.verify(md.digest().bytes(), forge.util.binary.raw.encode(signature));
+      } catch (e) { return false; }
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// FHIR helpers
+// ---------------------------------------------------------------------------
+
+// BFS extract of all triples reachable from rootNode through blank-node objects.
+// Deletes extracted triples from dataset and returns them.
+function extractSubgraph (dataset, rootNode) {
+  const quads = [];
+  const queue = [rootNode];
+  const visited = new Set();
+  while (queue.length > 0) {
+    const node = queue.shift();
+    const key = node.termType + ':' + node.value;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    for (const q of dataset.match(node, null, null)) {
+      quads.push(q);
+      if (q.object.termType === 'BlankNode')
+        queue.push(q.object);
+    }
+  }
+  quads.forEach(q => dataset.delete(q));
+  return quads;
+}
+
+// Walk resourceNode → fhir:signature → fhir:data → fhir:v and return the literal value.
+function findFhirSigToken (dataset, resourceNode) {
+  const sigQ = [...dataset.match(resourceNode, F.namedNode(NS.fhir + 'signature'), null)];
+  if (!sigQ.length) throw Error(`No fhir:signature on ${resourceNode.value}`);
+  const sigBN = sigQ[0].object;
+  const dataQ = [...dataset.match(sigBN, F.namedNode(NS.fhir + 'data'), null)];
+  if (!dataQ.length) throw Error('No fhir:data on fhir:signature node');
+  const dataBN = dataQ[0].object;
+  const vQ = [...dataset.match(dataBN, F.namedNode(NS.fhir + 'v'), null)];
+  if (!vQ.length) throw Error('No fhir:v on fhir:data node');
+  return { sigBN, token: vQ[0].object.value };
+}
+
+// Rename all blank nodes in a dataset using a string prefix (returns new dataset).
+function renameBlankNodes (dataset, prefix) {
+  const out = graphy.memory.dataset.fast();
+  for (const q of dataset.quads()) {
+    const s = q.subject.termType === 'BlankNode' ? F.blankNode(prefix + q.subject.value) : q.subject;
+    const o = q.object.termType === 'BlankNode' ? F.blankNode(prefix + q.object.value) : q.object;
+    out.add(F.quad(s, q.predicate, o, q.graph));
+  }
+  return out;
+}
+
+async function signFhir (vals) {
+  const signGraph = await parse('ttl', vals.signGraph);
+  const withProof = await parse('ttl', vals.withProof);
+  const proofNode = parseNode(vals.proofNode);
+  const alg = vals.alg || 'RS256';
+
+  // Only signGraph is signed — withProof (Provenance metadata or sig metadata) is not.
+  const signer = makeRsaSigner(vals.privKey);
+  const verifyData = await urdnaizeDocs([
+    await write('nt', [...signGraph.data.quads()]),
+  ]);
+
+  const token = await createJwsToken(verifyData, signer, alg);
+
+  // Inject fhir:data [ fhir:v token ] into withProof before renaming.
+  const sigQ = [...withProof.data.match(proofNode, F.namedNode(NS.fhir + 'signature'), null)];
+  if (!sigQ.length) throw Error(`No fhir:signature on ${proofNode.value}`);
+  const sigBN = sigQ[0].object;
+  const dataBN = F.blankNode();
+  withProof.data.add(F.quad(sigBN, F.namedNode(NS.fhir + 'data'), dataBN));
+  withProof.data.add(F.quad(dataBN, F.namedNode(NS.fhir + 'v'), F.literal(token)));
+
+  // Rename withProof blank nodes with 'wp' prefix to prevent collision with
+  // signGraph blank nodes (graphy assigns sequential labels g0,g1,... per parse call).
+  const withProofRenamed = renameBlankNodes(withProof.data, 'wp');
+  signGraph.data.addAll(withProofRenamed.quads());
+  const text = await write('ttl', [...signGraph.data], {
+    prefixes: Object.assign({
+      fhir: NS.fhir,
+      xsd: 'http://www.w3.org/2001/XMLSchema#',
+    }, signGraph.prefixes, withProof.prefixes)
+  });
+  $('#signed')[0].value = text;
+  $('#detectedAlg')[0].textContent = `${vals.sigKind} → alg: ${alg}`;
+}
+
+async function verifyFhir (vals) {
+  const verifyGraph = await parse('ttl', vals.verifyMe);
+  const signNode = parseNode(vals.signNode);
+  const alg = vals.alg || 'RS256';
+
+  let token;
+
+  if (vals.sigKind === 'fhirBundle') {
+    // Extract token and strip fhir:signature subgraph from Bundle.
+    const sigQ = [...verifyGraph.data.match(signNode, F.namedNode(NS.fhir + 'signature'), null)];
+    if (!sigQ.length) throw Error('No fhir:signature found on Bundle');
+    const sigBN = sigQ[0].object;
+    token = findFhirSigToken(verifyGraph.data, signNode).token;
+    verifyGraph.data.delete(sigQ[0]);         // remove signNode→fhir:signature triple
+    extractSubgraph(verifyGraph.data, sigBN); // remove signature subgraph
+
+  } else { // fhirProvenance
+    // Find a Provenance whose fhir:target fhir:reference fhir:v matches the Bundle.
+    // The reference is stored as a relative URL like "Bundle/signed".
+    const bundleRef = signNode.value.replace(/^https?:\/\/[^/]+\/fhir\//, '');
+    let provNode = null;
+    outer: for (const q1 of verifyGraph.data.match(null, F.namedNode(NS.fhir + 'target'), null)) {
+      for (const q2 of verifyGraph.data.match(q1.object, F.namedNode(NS.fhir + 'reference'), null)) {
+        for (const q3 of verifyGraph.data.match(q2.object, F.namedNode(NS.fhir + 'v'), null)) {
+          if (q3.object.value === bundleRef || q3.object.value === signNode.value) {
+            provNode = q1.subject;
+            break outer;
+          }
+        }
+      }
+    }
+    if (!provNode) throw Error(`No co-signing Provenance found targeting ${signNode.value}`);
+    token = findFhirSigToken(verifyGraph.data, provNode).token;
+    extractSubgraph(verifyGraph.data, provNode); // strip Provenance and all its blank nodes
+  }
+
+  const verifier = makeRsaVerifier(vals.pubKey);
+  const verifyData = await urdnaizeDocs([
+    await write('nt', [...verifyGraph.data.quads()]),
+  ]);
+  const verified = await verifyJwsToken(token, verifyData, verifier);
+  $('#result')[0].value = verified;
+  $('#detectedAlg')[0].textContent = `${vals.sigKind} → alg: ${alg}`;
+}
+
+// ---------------------------------------------------------------------------
+// Sign button
+// ---------------------------------------------------------------------------
 $('#sign')[0].onclick = async function (evt) {
   debugger; // so folks can follow along
 
   try {
-    // Grab parms from form.
-    const vals = (['sigKind', 'signGraph', 'signNode', 'withProof', 'proofNode', 'privKey']).reduce((acc, key) => {
+    const vals = (['sigKind', 'signGraph', 'signNode', 'withProof', 'proofNode', 'privKey', 'alg']).reduce((acc, key) => {
       acc[key] = $('#' + key)[0].value;
       return acc;
     }, {});
+
+    if (vals.sigKind === 'fhirProvenance' || vals.sigKind === 'fhirBundle') {
+      await signFhir(vals);
+      return;
+    }
+
     const [signGraph, withProof] = await Promise.all([
       parse('ttl', vals.signGraph),
       parse('ttl', vals.withProof),
@@ -71,7 +264,12 @@ $('#sign')[0].onclick = async function (evt) {
     const signNode = parseNode(vals.signNode);
     const proofNode = parseNode(vals.proofNode);
 
-    // Copy embeddeed proof with BlankNode subject.
+    // Detect key class and JWS algorithm from proof type.
+    const { proofType, keyClass, alg } = getProofTypeInfo(withProof.data, proofNode);
+    $('#detectedAlg')[0].textContent =
+      `detected: ${proofType.replace(NS.sec, 'sec:')} → alg: ${alg}`;
+
+    // Copy embedded proof with BlankNode subject.
     const embeddedProofNode = F.blankNode();
     const anonymousProof = graphy.memory.dataset.fast();
     ([...withProof.data.quads(null, null, null, null)]).map(q => {
@@ -82,12 +280,18 @@ $('#sign')[0].onclick = async function (evt) {
       anonymousProof.add(q);
     });
 
-    // Construct signing (private) key.
-    const keyPair1priv = await Ed25519KeyPair.generate({
-      privateKeyBase58: vals.privKey,
-    });
+    // Construct signing key.
+    let signer;
+    if (keyClass === 'Ed25519') {
+      const keyPair = await Ed25519KeyPair.generate({ privateKeyBase58: vals.privKey });
+      signer = keyPair.signer();
+    } else if (keyClass === 'RSA') {
+      signer = makeRsaSigner(vals.privKey);
+    } else {
+      throw Error(`Unsupported key class: ${keyClass}`);
+    }
 
-    // Compose signature applies to concatonation of both graphs.
+    // Compose signature applies to concatenation of both graphs.
     const verifyData = await urdnaizeDocs([
       await write('nt', [...anonymousProof.quads()]),
       await write('nt', [...signGraph.data.quads()]),
@@ -97,7 +301,7 @@ $('#sign')[0].onclick = async function (evt) {
     anonymousProof.add(F.quad(
       embeddedProofNode,
       F.namedNode(SigKinds[sigKind.value].predicate),
-      F.literal(await SigKinds[sigKind.value].create(verifyData, keyPair1priv.signer()))
+      F.literal(await SigKinds[sigKind.value].create(verifyData, signer, alg))
     ));
 
     // Connect proof to signed node.
@@ -112,7 +316,7 @@ $('#sign')[0].onclick = async function (evt) {
     const text = await write('ttl', [...signGraph.data], {
       prefixes: Object.assign({}, {
         cred: 'https://www.w3.org/2018/credentials#',
-        rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+        rdf: NS.rdf,
       }, signGraph.prefixes, withProof.prefixes)
     });
     $('#signed')[0].value = text;
@@ -125,16 +329,23 @@ $('#copyDown')[0].onclick = function (evt) {
   $('#verifyMe')[0].value = $('#signed')[0].value;
 }
 
-// When verify is clicked...
+// ---------------------------------------------------------------------------
+// Verify button
+// ---------------------------------------------------------------------------
 $('#verify')[0].onclick = async function (evt) {
   debugger; // so folks can follow along
 
   try {
-    // Grab parms from form.
-    const vals = (['sigKind', 'verifyMe', 'pubKey', 'keyId']).reduce((acc, key) => {
+    const vals = (['sigKind', 'verifyMe', 'pubKey', 'keyId', 'signNode', 'alg']).reduce((acc, key) => {
       acc[key] = $('#' + key)[0].value;
       return acc;
     }, {});
+
+    if (vals.sigKind === 'fhirProvenance' || vals.sigKind === 'fhirBundle') {
+      await verifyFhir(vals);
+      return;
+    }
+
     const verifyGraph = await parse('ttl', vals.verifyMe);
 
     // Find the quad with predicate sec:proof
@@ -170,27 +381,44 @@ $('#verify')[0].onclick = async function (evt) {
       null
     ));
 
-    // Construct public key.
-    const keyPair1pub = await Ed25519KeyPair.generate({
-      id: vals.keyId,
-      publicKeyBase58: vals.pubKey,
-    });
+    // Detect key class and algorithm from proof type.
+    const { proofType, keyClass, alg } = getProofTypeInfo(anonymousProof, embeddedProofNode);
+    $('#detectedAlg')[0].textContent =
+      `detected: ${proofType.replace(NS.sec, 'sec:')} → alg: ${alg}`;
 
-    // Verify that signature applies to concatonation of both graphs.
+    // Construct public key verifier.
+    let verifier;
+    if (keyClass === 'Ed25519') {
+      const keyPair = await Ed25519KeyPair.generate({
+        id: vals.keyId,
+        publicKeyBase58: vals.pubKey,
+      });
+      verifier = keyPair.verifier();
+    } else if (keyClass === 'RSA') {
+      verifier = makeRsaVerifier(vals.pubKey);
+    } else {
+      throw Error(`Unsupported key class: ${keyClass}`);
+    }
+
+    // Verify that signature applies to concatenation of both graphs.
     const verifyData = await urdnaizeDocs([
       await write('nt', [...anonymousProof.quads()]),
       await write('nt', [...verifyGraph.data.quads()]),
     ]);
-    const verified = await SigKinds[sigKind.value].verify(signature, verifyData, keyPair1pub.verifier());
+    const verified = await SigKinds[sigKind.value].verify(signature, verifyData, verifier);
     $('#result')[0].value = verified;
   } catch (e) {
-    $('#result')[0].value = e.message;    
+    $('#result')[0].value = e.message;
   }
 }
 
+// ---------------------------------------------------------------------------
+// Utilities
+// ---------------------------------------------------------------------------
+
 /** extract matching triples from a graph.
  * @param count: number | null - how many to expect
- * @param types: object - making of triple component to expected type
+ * @param types: object - mapping of triple component to expected type
  * @param label: string - string to embed in throw Errors.
  * @param graph: Dataset (modified) - where to match s, p, o
  * @param s, p, o: Term | null - what to match
@@ -225,15 +453,8 @@ async function write (format, data, opts) {
     writer.on('error', (error) => {
       reject(error);
     });
-    // writer.on('eof', (prefixes) => {
-    //   resolve(ret);
-    // });
     data.forEach(q => writer.write(q));
-    // I am 100% confident this is how I'm supposed to signal the end of input.
-    setTimeout(() => resolve(ret), 100); // but seriously, what do I do here?
-    // I tried some stuff that didn't work:
-    // writer.end();
-    // writer.emit('eof');
+    setTimeout(() => resolve(ret), 100);
   });
 }
 
@@ -254,8 +475,8 @@ async function parse (format, str) {
   });
 }
 
-async function createJwsToken (verifyData, signer) {
-  const header = { alg: 'EdDSA', b64: false, crit: ['b64'] };
+async function createJwsToken (verifyData, signer, alg = 'EdDSA') {
+  const header = { alg, b64: false, crit: ['b64'] };
   const encodedHeader = util.encodeBase64Url(JSON.stringify(header));
   const data = util.createJws({encodedHeader, verifyData});
   const signature = await signer.sign({data});
@@ -269,7 +490,6 @@ async function verifyJwsToken (jws, verifyData, verifier) {
   const signature = util.decodeBase64Url(encodedSignature);
   const data = util.createJws({encodedHeader, verifyData});
   return await verifier.verify({data: data, signature: signature});
-  // or call native verify(null, Buffer.from(data.buffer, data.byteOffset, data.length), keyPair1pub, signature)
 }
 
 async function createProofValue (verifyData, signer) {
@@ -307,4 +527,3 @@ function parseQueryString (query) {
   });
   return map;
 };
-
