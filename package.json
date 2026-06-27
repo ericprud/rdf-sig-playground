@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "js-yaml": "^4.1.0",
-    "n3": "^2.1.0"
+    "n3": "^2.1.0",
+    "n3writer-wrapper": "file:../n3writer-wrapper"
   }
 }
