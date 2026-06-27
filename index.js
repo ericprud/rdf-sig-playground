@@ -1,4 +1,4 @@
-const {Ed25519KeyPair, forge, jsonld, util, Buffer, jsYaml, base58} = rdfsig;
+const {Ed25519KeyPair, forge, jsonld, util, Buffer, jsYaml, base58, N3Writer, topoWrite, reindent, expandLiterals} = rdfsig;
 const $ = document.querySelectorAll.bind(document);
 const DefaultManifest = ['examples/toy.yaml'];
 const F = graphy.core.data.factory;
@@ -444,15 +444,21 @@ function parseNode (lexical) {
 }
 
 async function write (format, data, opts) {
+  if (format === 'ttl') {
+    const prefixes = opts?.prefixes || {};
+    const writer = new N3Writer({ format: 'Turtle', prefixes });
+    topoWrite(writer, data);
+    const text = await new Promise((resolve, reject) => {
+      writer.end((err, result) => err ? reject(err) : resolve(result));
+    });
+    return expandLiterals(reindent(text));
+  }
+  // 'nt' and others: use graphy
   const writer = graphy.content[format].write(opts);
   return new Promise((resolve, reject) => {
     let ret = '';
-    writer.on('data', (turtle) => {
-      ret += (turtle + '').replace(/\n\n/g, '\n');
-    });
-    writer.on('error', (error) => {
-      reject(error);
-    });
+    writer.on('data', (chunk) => { ret += chunk; });
+    writer.on('error', reject);
     data.forEach(q => writer.write(q));
     setTimeout(() => resolve(ret), 100);
   });
