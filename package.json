@@ -9,15 +9,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/janeirodigital/rdf-sig-playground.git"
+    "url": "git+https://github.com/ericprud/rdf-sig-playground.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/janeirodigital/rdf-sig-playground/issues"
+    "url": "https://github.com/ericprud/rdf-sig-playground/issues"
   },
-  "homepage": "https://github.com/janeirodigital/rdf-sig-playground#readme",
+  "homepage": "https://github.com/ericprud/rdf-sig-playground#readme",
   "devDependencies": {
     "browserify": "^17.0.0",
     "buffer": "^6.0.3",
@@ -28,6 +28,6 @@
   "dependencies": {
     "js-yaml": "^4.1.0",
     "n3": "^2.1.0",
-    "n3writer-wrapper": "file:../n3writer-wrapper"
+    "n3writer-wrapper": "^1.0.0"
   }
 }
