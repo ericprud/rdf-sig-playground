@@ -110201,9 +110201,9 @@ try {
 },{"./iterator.js":350}],352:[function(require,module,exports){
 const CryptoLd = require('crypto-ld');
 const forge = require('node-forge');
-const {util: {binary: {base58}}} = forge;
+const { util: { binary: { base58 } } } = forge;
 const { Writer: N3Writer } = require('n3');
-const { topoWrite, reindent, expandLiterals } = require('n3writer-wrapper');
+const N3WriterWrapper = require('n3writer-wrapper');
 
 module.exports = {
   Ed25519KeyPair: CryptoLd.Ed25519KeyPair,
@@ -110215,9 +110215,7 @@ module.exports = {
   jsYaml: require('js-yaml'),
   base58: base58,
   N3Writer,
-  topoWrite,
-  reindent,
-  expandLiterals,
+  N3WriterWrapper,
 }
 
 },{"buffer":79,"crypto-ld":96,"graphy":128,"js-yaml":145,"jsonld":189,"jsonld-signatures/lib/util.js":171,"n3":214,"n3writer-wrapper":240,"node-forge":253}]},{},[352])(352)

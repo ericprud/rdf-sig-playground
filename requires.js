@@ -1,8 +1,8 @@
 const CryptoLd = require('crypto-ld');
 const forge = require('node-forge');
-const {util: {binary: {base58}}} = forge;
+const { util: { binary: { base58 } } } = forge;
 const { Writer: N3Writer } = require('n3');
-const { topoWrite, reindent, expandLiterals } = require('n3writer-wrapper');
+const N3WriterWrapper = require('n3writer-wrapper');
 
 module.exports = {
   Ed25519KeyPair: CryptoLd.Ed25519KeyPair,
@@ -14,7 +14,5 @@ module.exports = {
   jsYaml: require('js-yaml'),
   base58: base58,
   N3Writer,
-  topoWrite,
-  reindent,
-  expandLiterals,
+  N3WriterWrapper,
 }

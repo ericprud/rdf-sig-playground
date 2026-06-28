@@ -1,4 +1,4 @@
-const {Ed25519KeyPair, forge, jsonld, util, Buffer, jsYaml, base58, N3Writer, topoWrite, reindent, expandLiterals} = rdfsig;
+const {Ed25519KeyPair, forge, jsonld, util, Buffer, jsYaml, base58, N3Writer, N3WriterWrapper} = rdfsig;
 const $ = document.querySelectorAll.bind(document);
 const DefaultManifest = ['examples/toy.yaml'];
 const F = graphy.core.data.factory;
@@ -57,9 +57,32 @@ $('#signGraph')[0].value = ''; // clear out for error messages
   }
 })
 
-// Example button action. Clear alg first so examples without it don't show a stale value.
+const Fields = [
+  '#alg',        // 0  signing inputs
+  '#signNode',   // 1
+  '#signGraph',  // 2
+  '#proofNode',  // 3
+  '#withProof',  // 4
+  '#keyId',      // 5
+  '#privKey',    // 6
+  '#pubKey',     // 7  verification input (stable across re-signs)
+  '#signed',     // 8  signing output
+  '#verifyMe',   // 9  verification input
+  '#result',     // 10 verification output
+];
+const ClearFrom = {
+  fill:     Fields.indexOf('#alg'),
+  sign:     Fields.indexOf('#signed'),
+  copyDown: Fields.indexOf('#verifyMe'),
+  verify:   Fields.indexOf('#result'),
+};
+function clearFrom (offset) {
+  Fields.slice(offset).forEach(sel => { $(sel)[0].value = ''; });
+}
+
+// Example button action.
 function fill (fields) {
-  $('#alg')[0].value = '';
+  clearFrom(ClearFrom.fill);
   Object.keys(fields).forEach(id => {
     const el = document.querySelector('#' + id);
     if (el) el.value = fields[id];
@@ -185,6 +208,44 @@ async function signFhir (vals) {
   // signGraph blank nodes (graphy assigns sequential labels g0,g1,... per parse call).
   const withProofRenamed = renameBlankNodes(withProof.data, 'wp');
   signGraph.data.addAll(withProofRenamed.quads());
+
+  // For co-signed Bundles: append the Provenance as the last element of the
+  // Bundle's fhir:entry RDF collection (first/rest list), matching the FHIR RDF
+  // serialization used for the other entries.
+  if (vals.sigKind === 'fhirProvenance') {
+    const signNodeIRI = parseNode(vals.signNode);
+    const rdfFirst = F.namedNode(NS.rdf + 'first');
+    const rdfRest  = F.namedNode(NS.rdf + 'rest');
+    const rdfNil   = F.namedNode(NS.rdf + 'nil');
+    const entryBN       = F.blankNode('wpEntry');
+    const fullUrlBN     = F.blankNode('wpEntryFullUrl');
+    const resourceListBN = F.blankNode('wpEntryResource');
+    const listNodeBN    = F.blankNode('wpEntryList');
+    signGraph.data.add(F.quad(entryBN, F.namedNode(NS.fhir + 'fullUrl'), fullUrlBN));
+    signGraph.data.add(F.quad(fullUrlBN, F.namedNode(NS.fhir + 'v'), F.literal(proofNode.value, F.namedNode('http://www.w3.org/2001/XMLSchema#anyURI'))));
+    signGraph.data.add(F.quad(fullUrlBN, F.namedNode(NS.fhir + 'l'), proofNode));
+    signGraph.data.add(F.quad(entryBN, F.namedNode(NS.fhir + 'resource'), resourceListBN));
+    signGraph.data.add(F.quad(resourceListBN, rdfFirst, proofNode));
+    signGraph.data.add(F.quad(resourceListBN, rdfRest, rdfNil));
+    signGraph.data.add(F.quad(listNodeBN, rdfFirst, entryBN));
+    signGraph.data.add(F.quad(listNodeBN, rdfRest, rdfNil));
+    const entryHeads = [...signGraph.data.match(signNodeIRI, F.namedNode(NS.fhir + 'entry'), null)];
+    if (entryHeads.length > 0) {
+      let cur = entryHeads[0].object;
+      while (true) {
+        const rest = [...signGraph.data.match(cur, rdfRest, null)];
+        if (!rest.length || rest[0].object.equals(rdfNil)) {
+          if (rest.length) signGraph.data.delete(rest[0]);
+          signGraph.data.add(F.quad(cur, rdfRest, listNodeBN));
+          break;
+        }
+        cur = rest[0].object;
+      }
+    } else {
+      signGraph.data.add(F.quad(signNodeIRI, F.namedNode(NS.fhir + 'entry'), listNodeBN));
+    }
+  }
+
   const text = await write('ttl', [...signGraph.data], {
     prefixes: Object.assign({
       fhir: NS.fhir,
@@ -208,7 +269,7 @@ async function verifyFhir (vals) {
     if (!sigQ.length) throw Error('No fhir:signature found on Bundle');
     const sigBN = sigQ[0].object;
     token = findFhirSigToken(verifyGraph.data, signNode).token;
-    verifyGraph.data.delete(sigQ[0]);         // remove signNode→fhir:signature triple
+    verifyGraph.data.delete(sigQ[0]);         // remove signNode→fhir:signature triple; deteches signature from the graph
     extractSubgraph(verifyGraph.data, sigBN); // remove signature subgraph
 
   } else { // fhirProvenance
@@ -228,6 +289,44 @@ async function verifyFhir (vals) {
     }
     if (!provNode) throw Error(`No co-signing Provenance found targeting ${signNode.value}`);
     token = findFhirSigToken(verifyGraph.data, provNode).token;
+    // Walk the fhir:entry RDF collection on signNode to find and splice out the
+    // Provenance list node, restoring the original signed Bundle structure.
+    const rdfFirst = F.namedNode(NS.rdf + 'first');
+    const rdfRest  = F.namedNode(NS.rdf + 'rest');
+    const rdfNil   = F.namedNode(NS.rdf + 'nil');
+    const entryHeads = [...verifyGraph.data.match(signNode, F.namedNode(NS.fhir + 'entry'), null)];
+    if (entryHeads.length > 0) {
+      let prev = null;
+      let cur = entryHeads[0].object;
+      let found = false;
+      while (!found && !cur.equals(rdfNil)) {
+        const firstQs = [...verifyGraph.data.match(cur, rdfFirst, null)];
+        const restQs  = [...verifyGraph.data.match(cur, rdfRest,  null)];
+        const next = restQs.length ? restQs[0].object : rdfNil;
+        if (firstQs.length > 0 && firstQs[0].object.termType === 'BlankNode') {
+          const entryBN = firstQs[0].object;
+          for (const rq of verifyGraph.data.match(entryBN, F.namedNode(NS.fhir + 'resource'), null)) {
+            if (rq.object.termType !== 'BlankNode') continue;
+            const rfQs = [...verifyGraph.data.match(rq.object, rdfFirst, null)];
+            if (rfQs.length > 0 && rfQs[0].object.equals(provNode)) {
+              if (prev) {
+                const prevRest = [...verifyGraph.data.match(prev, rdfRest, null)];
+                if (prevRest.length) verifyGraph.data.delete(prevRest[0]);
+                verifyGraph.data.add(F.quad(prev, rdfRest, next));
+              } else {
+                verifyGraph.data.delete(entryHeads[0]);
+                if (!next.equals(rdfNil))
+                  verifyGraph.data.add(F.quad(signNode, F.namedNode(NS.fhir + 'entry'), next));
+              }
+              extractSubgraph(verifyGraph.data, cur); // removes list node + entry BN + fullUrl + resource list
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) { prev = cur; cur = next; }
+      }
+    }
     extractSubgraph(verifyGraph.data, provNode); // strip Provenance and all its blank nodes
   }
 
@@ -245,7 +344,7 @@ async function verifyFhir (vals) {
 // ---------------------------------------------------------------------------
 $('#sign')[0].onclick = async function (evt) {
   debugger; // so folks can follow along
-
+  clearFrom(ClearFrom.sign);
   try {
     const vals = (['sigKind', 'signGraph', 'signNode', 'withProof', 'proofNode', 'privKey', 'alg']).reduce((acc, key) => {
       acc[key] = $('#' + key)[0].value;
@@ -326,6 +425,7 @@ $('#sign')[0].onclick = async function (evt) {
 }
 
 $('#copyDown')[0].onclick = function (evt) {
+  clearFrom(ClearFrom.copyDown);
   $('#verifyMe')[0].value = $('#signed')[0].value;
 }
 
@@ -334,7 +434,7 @@ $('#copyDown')[0].onclick = function (evt) {
 // ---------------------------------------------------------------------------
 $('#verify')[0].onclick = async function (evt) {
   debugger; // so folks can follow along
-
+  clearFrom(ClearFrom.verify);
   try {
     const vals = (['sigKind', 'verifyMe', 'pubKey', 'keyId', 'signNode', 'alg']).reduce((acc, key) => {
       acc[key] = $('#' + key)[0].value;
@@ -447,11 +547,11 @@ async function write (format, data, opts) {
   if (format === 'ttl') {
     const prefixes = opts?.prefixes || {};
     const writer = new N3Writer({ format: 'Turtle', prefixes });
-    topoWrite(writer, data);
+    N3WriterWrapper.topoWrite(writer, data);
     const text = await new Promise((resolve, reject) => {
       writer.end((err, result) => err ? reject(err) : resolve(result));
     });
-    return expandLiterals(reindent(text));
+    return N3WriterWrapper.expandLiterals(N3WriterWrapper.reindent(text));
   }
   // 'nt' and others: use graphy
   const writer = graphy.content[format].write(opts);

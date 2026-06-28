@@ -76,14 +76,14 @@ fhir bundle (co-signing Provenance):
         fhir:status [ fhir:v "final" ] ;
         fhir:code [ fhir:text [ fhir:v "something" ] ] ;
         fhir:value [ a fhir:Quantity ; fhir:value [ fhir:v "1"^^xsd:decimal ] ] .
-  proofNode: http://something4
+  proofNode: urn:uuid:b5dd98c2-002c-4da0-9cbf-bcb612e1d29c
   withProof: |
     PREFIX fhir: <http://hl7.org/fhir/>
     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
     # Provenance co-signs the Bundle. Its attribution metadata (agent, recorded, reason)
     # is NOT covered by the signature — only signGraph above is signed.
     # The rule: strip all Provenance entries whose fhir:target references this Bundle before hashing.
-    <http://something4> a fhir:Provenance ;
+    <urn:uuid:b5dd98c2-002c-4da0-9cbf-bcb612e1d29c> a fhir:Provenance ;
         fhir:id [ fhir:v "prov1" ] ;
         fhir:target [ fhir:reference [ fhir:v "Bundle/signed" ] ] ;
         fhir:recorded [ fhir:v "2024-06-09T11:06:35+10:00"^^xsd:dateTime ] ;
