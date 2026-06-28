@@ -70420,6 +70420,8 @@ __export(index_exports, {
   topoWrite: () => topoWrite
 });
 module.exports = __toCommonJS(index_exports);
+var RDF_FIRST = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+var RDF_REST = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
 function topoWrite(writer, quads) {
   const termKey = (t) => t.termType === "Literal" ? `L\0${t.value}\0${t.datatype?.value ?? ""}\0${t.language ?? ""}` : `${t.termType[0]}\0${t.value}`;
   const seen = /* @__PURE__ */ new Set();
@@ -70427,9 +70429,45 @@ function topoWrite(writer, quads) {
     const k = `${termKey(q.graph)}\0${termKey(q.subject)}\0${q.predicate.value}\0${termKey(q.object)}`;
     return seen.size !== seen.add(k).size;
   });
+  const isListRestNode = /* @__PURE__ */ new Set();
+  for (const q of deduped) {
+    if (q.predicate.value === RDF_REST && q.object.termType === "BlankNode")
+      isListRestNode.add(q.object.value);
+  }
+  const listItems = /* @__PURE__ */ new Map();
+  const listNodeIds = /* @__PURE__ */ new Set();
+  for (const q of deduped) {
+    if (q.predicate.value !== RDF_FIRST || q.subject.termType !== "BlankNode") continue;
+    if (isListRestNode.has(q.subject.value)) continue;
+    const headId = q.subject.value;
+    if (listItems.has(headId)) continue;
+    const graph = q.graph;
+    const items = [];
+    let curId = headId;
+    walk: while (true) {
+      listNodeIds.add(curId);
+      let first;
+      let nextId = null;
+      for (const qq of deduped) {
+        if (qq.subject.termType !== "BlankNode" || qq.subject.value !== curId) continue;
+        if (qq.predicate.value === RDF_FIRST) first = qq.object;
+        if (qq.predicate.value === RDF_REST) {
+          nextId = qq.object.termType === "BlankNode" ? qq.object.value : null;
+        }
+      }
+      if (!first) break walk;
+      items.push(first);
+      if (nextId === null) break walk;
+      curId = nextId;
+    }
+    listItems.set(headId, { items, graph });
+  }
+  const normalQuads = deduped.filter(
+    (q) => !(q.subject.termType === "BlankNode" && listNodeIds.has(q.subject.value))
+  );
   const bySub = /* @__PURE__ */ new Map();
   const oCount = /* @__PURE__ */ new Map();
-  for (const q of deduped) {
+  for (const q of normalQuads) {
     const k = `${q.graph.value}\0${q.subject.termType}\0${q.subject.value}`;
     if (!bySub.has(k)) bySub.set(k, { term: q.subject, graph: q.graph, pos: [] });
     bySub.get(k).pos.push(q);
@@ -70438,14 +70476,30 @@ function topoWrite(writer, quads) {
       oCount.set(ok, (oCount.get(ok) ?? 0) + 1);
     }
   }
-  const inlineable = (bn, graph) => oCount.get(`${graph.value}\0${bn.value}`) === 1 && bySub.has(`${graph.value}\0BlankNode\0${bn.value}`);
+  for (const { items, graph } of listItems.values()) {
+    for (const item of items) {
+      if (item.termType === "BlankNode") {
+        const ok = `${graph.value}\0${item.value}`;
+        oCount.set(ok, (oCount.get(ok) ?? 0) + 1);
+      }
+    }
+  }
+  const inlineable = (bn, graph) => !listNodeIds.has(bn.value) && oCount.get(`${graph.value}\0${bn.value}`) === 1 && bySub.has(`${graph.value}\0BlankNode\0${bn.value}`);
+  function buildObject(obj, graph) {
+    if (obj.termType !== "BlankNode") return obj;
+    const listEntry = listItems.get(obj.value);
+    if (listEntry)
+      return writer.list(listEntry.items.map((item) => buildObject(item, listEntry.graph)));
+    if (inlineable(obj, graph)) return buildBlank(obj, graph);
+    return obj;
+  }
   function buildBlank(bn, graph) {
     const entry = bySub.get(`${graph.value}\0BlankNode\0${bn.value}`);
     if (!entry) return writer.blank();
     return writer.blank(
       entry.pos.map((q) => ({
         predicate: q.predicate,
-        object: q.object.termType === "BlankNode" && inlineable(q.object, graph) ? buildBlank(q.object, graph) : q.object
+        object: buildObject(q.object, graph)
       }))
     );
   }
@@ -70455,7 +70509,7 @@ function topoWrite(writer, quads) {
       writer.addQuad(
         q.subject,
         q.predicate,
-        q.object.termType === "BlankNode" && inlineable(q.object, graph) ? buildBlank(q.object, graph) : q.object,
+        buildObject(q.object, graph),
         q.graph
       );
     }
