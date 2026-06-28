@@ -78,6 +78,8 @@ const ClearFrom = {
 };
 function clearFrom (offset) {
   Fields.slice(offset).forEach(sel => { $(sel)[0].value = ''; });
+  $('#proofMeta')[0].textContent = '';
+  $('#verify')[0].classList.remove('failed');
 }
 
 // Example button action.
@@ -182,6 +184,80 @@ function renameBlankNodes (dataset, prefix) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Signature metadata extraction
+// ---------------------------------------------------------------------------
+
+function fhirVal(ds, subj, predIRI) {
+  for (const q1 of ds.match(subj, F.namedNode(predIRI), null))
+    for (const q2 of ds.match(q1.object, F.namedNode(NS.fhir + 'v'), null))
+      return q2.object.value;
+  return null;
+}
+function fhirRef(ds, subj, predIRI) {
+  for (const q1 of ds.match(subj, F.namedNode(predIRI), null))
+    for (const q2 of ds.match(q1.object, F.namedNode(NS.fhir + 'reference'), null))
+      for (const q3 of ds.match(q2.object, F.namedNode(NS.fhir + 'v'), null))
+        return q3.object.value;
+  return null;
+}
+function rdfListFirst(ds, listHead) {
+  for (const q of ds.match(listHead, F.namedNode(NS.rdf + 'first'), null))
+    return q.object;
+  return null;
+}
+function extractSignMeta(sigKind, ds, rootNode) {
+  const meta = {};
+  const DC_CREATED = 'http://purl.org/dc/terms/created';
+  if (sigKind === 'jws' || sigKind === 'proofValue') {
+    for (const q of ds.match(rootNode, F.namedNode(RDF_TYPE), null))
+      meta.type = q.object.value.replace(NS.sec, 'sec:');
+    for (const q of ds.match(rootNode, F.namedNode(DC_CREATED), null))
+      meta.created = q.object.value;
+    for (const q of ds.match(rootNode, F.namedNode(NS.sec + 'proofPurpose'), null))
+      meta.proofPurpose = q.object.value.replace(NS.sec, 'sec:');
+    for (const q of ds.match(rootNode, F.namedNode(NS.sec + 'verificationMethod'), null))
+      meta.verificationMethod = q.object.value;
+  } else if (sigKind === 'fhirBundle') {
+    for (const q of ds.match(rootNode, F.namedNode(NS.fhir + 'signature'), null)) {
+      const sig = q.object;
+      meta.when         = fhirVal(ds, sig, NS.fhir + 'when');
+      meta.who          = fhirRef(ds, sig, NS.fhir + 'who');
+      meta.sigFormat    = fhirVal(ds, sig, NS.fhir + 'sigFormat');
+      meta.targetFormat = fhirVal(ds, sig, NS.fhir + 'targetFormat');
+      for (const qt of ds.match(sig, F.namedNode(NS.fhir + 'type'), null))
+        for (const qc of ds.match(qt.object, F.namedNode(NS.fhir + 'coding'), null)) {
+          const coding = rdfListFirst(ds, qc.object);
+          if (coding) {
+            meta.code       = fhirVal(ds, coding, NS.fhir + 'code');
+            meta.codeSystem = fhirVal(ds, coding, NS.fhir + 'system');
+          }
+        }
+    }
+  } else { // fhirProvenance
+    meta.recorded = fhirVal(ds, rootNode, NS.fhir + 'recorded');
+    for (const qa of ds.match(rootNode, F.namedNode(NS.fhir + 'agent'), null)) {
+      meta.who = fhirRef(ds, qa.object, NS.fhir + 'who');
+      for (const qt of ds.match(qa.object, F.namedNode(NS.fhir + 'type'), null))
+        for (const qc of ds.match(qt.object, F.namedNode(NS.fhir + 'coding'), null)) {
+          const coding = rdfListFirst(ds, qc.object);
+          if (coding) {
+            meta.participantType = fhirVal(ds, coding, NS.fhir + 'code');
+            meta.codeSystem      = fhirVal(ds, coding, NS.fhir + 'system');
+          }
+        }
+    }
+    for (const qs of ds.match(rootNode, F.namedNode(NS.fhir + 'signature'), null)) {
+      meta.when      = fhirVal(ds, qs.object, NS.fhir + 'when');
+      meta.sigFormat = fhirVal(ds, qs.object, NS.fhir + 'sigFormat');
+    }
+  }
+  return Object.fromEntries(Object.entries(meta).filter(([, v]) => v != null));
+}
+function showProofMeta(meta) {
+  $('#proofMeta')[0].textContent = Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join('\n');
+}
+
 async function signFhir (vals) {
   const signGraph = await parse('ttl', vals.signGraph);
   const withProof = await parse('ttl', vals.withProof);
@@ -261,13 +337,14 @@ async function verifyFhir (vals) {
   const signNode = parseNode(vals.signNode);
   const alg = vals.alg || 'RS256';
 
-  let token;
+  let token, meta;
 
   if (vals.sigKind === 'fhirBundle') {
     // Extract token and strip fhir:signature subgraph from Bundle.
     const sigQ = [...verifyGraph.data.match(signNode, F.namedNode(NS.fhir + 'signature'), null)];
     if (!sigQ.length) throw Error('No fhir:signature found on Bundle');
     const sigBN = sigQ[0].object;
+    meta = extractSignMeta('fhirBundle', verifyGraph.data, signNode);
     token = findFhirSigToken(verifyGraph.data, signNode).token;
     verifyGraph.data.delete(sigQ[0]);         // remove signNode→fhir:signature triple; deteches signature from the graph
     extractSubgraph(verifyGraph.data, sigBN); // remove signature subgraph
@@ -288,6 +365,7 @@ async function verifyFhir (vals) {
       }
     }
     if (!provNode) throw Error(`No co-signing Provenance found targeting ${signNode.value}`);
+    meta = extractSignMeta('fhirProvenance', verifyGraph.data, provNode);
     token = findFhirSigToken(verifyGraph.data, provNode).token;
     // Walk the fhir:entry RDF collection on signNode to find and splice out the
     // Provenance list node, restoring the original signed Bundle structure.
@@ -337,6 +415,7 @@ async function verifyFhir (vals) {
   const verified = await verifyJwsToken(token, verifyData, verifier);
   $('#result')[0].value = verified;
   $('#detectedAlg')[0].textContent = `${vals.sigKind} → alg: ${alg}`;
+  return meta;
 }
 
 // ---------------------------------------------------------------------------
@@ -442,9 +521,8 @@ $('#verify')[0].onclick = async function (evt) {
     }, {});
 
     if (vals.sigKind === 'fhirProvenance' || vals.sigKind === 'fhirBundle') {
-      await verifyFhir(vals);
-      return;
-    }
+      showProofMeta(await verifyFhir(vals));
+    } else {
 
     const verifyGraph = await parse('ttl', vals.verifyMe);
 
@@ -485,6 +563,7 @@ $('#verify')[0].onclick = async function (evt) {
     const { proofType, keyClass, alg } = getProofTypeInfo(anonymousProof, embeddedProofNode);
     $('#detectedAlg')[0].textContent =
       `detected: ${proofType.replace(NS.sec, 'sec:')} → alg: ${alg}`;
+    const meta = extractSignMeta(vals.sigKind, anonymousProof, embeddedProofNode);
 
     // Construct public key verifier.
     let verifier;
@@ -507,10 +586,24 @@ $('#verify')[0].onclick = async function (evt) {
     ]);
     const verified = await SigKinds[sigKind.value].verify(signature, verifyData, verifier);
     $('#result')[0].value = verified;
+    showProofMeta(meta);
+    } // else jws/proofValue
   } catch (e) {
     $('#result')[0].value = e.message;
   }
+  if ($('#result')[0].value !== 'true')
+    $('#verify')[0].classList.add('failed');
 }
+
+// ---------------------------------------------------------------------------
+// Key bindings  C-Enter=sign  C-↓=copyDown  C-\=verify
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', function (evt) {
+  if (!evt.ctrlKey) return;
+  if (evt.key === 'Enter')     { evt.preventDefault(); $('#sign')[0].click(); }
+  if (evt.key === 'ArrowDown') { evt.preventDefault(); $('#copyDown')[0].click(); }
+  if (evt.key === '\\')        { evt.preventDefault(); $('#verify')[0].click(); }
+});
 
 // ---------------------------------------------------------------------------
 // Utilities

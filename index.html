@@ -3,6 +3,7 @@
     <title>RDF Signature Example</title>
     <style>
       button { background-color: lightgreen; }
+      .failed { background-color: tomato; }
       #manifest button { margin: 0 .5ex; }
       .fake-link {
           color: blue;
@@ -37,20 +38,21 @@
     <label for="keyId" style="padding-left: 8em;">keyId:</label> <textarea id="keyId" cols=100, rows=1></textarea><br/>
     <label for="privKey" style="padding-left: 8em;">Base58:</label> <textarea id="privKey" cols=100, rows=1></textarea>
     <div style="padding: 3ex 0;">
-      <button id="sign">sign</button>
+      <button id="sign">sign ^↵</button>
       <span id="detectedAlg" style="margin-left: 2ex; color: #555; font-style: italic;"></span>
       <h2 style="display: inline;">produces:</h2>
     </div>
     <textarea id="signed" cols=132, rows=15></textarea>
     <br/>
-    <button id="copyDown">copy to signed graph</button>
+    <button id="copyDown">copy to signed graph ^↓</button>
     <h2>test signed graph:</h2>
     <textarea id="verifyMe" cols=132, rows=10></textarea>
     <h2>with public key:</h2>
     <textarea id="pubKey" cols=132, rows=1></textarea>
     <p>
-      <button id="verify">verify</button> <input id="result" style="width: 100ex;"></input>
+      <button id="verify">verify ^\</button> <input id="result" style="width: 100ex;"></input>
     </p>
+    <pre id="proofMeta" style="margin: 0 0 1ex 2ex; color: #555; font-size: 0.9em;"></pre>
     <hr/>
     <h1>README</h1>
     <p>
@@ -64,7 +66,7 @@
     </p>
     <p>
       PRs, issues and advice welcome.
-      See the <a href="https://github.com/janeirodigital/rdf-sig-playground/blob/main/index.js">main source</a> and the <a href="https://github.com/janeirodigital/rdf-sig-playground/blob/main/package.json">supporting libraries</a>.
+      See the <a href="https://github.com/ericprud/rdf-sig-playground/blob/main/index.js">main source</a> and the <a href="https://github.com/ericprud/rdf-sig-playground/blob/main/package.json">supporting libraries</a>.
     </p>
     <script src="rdf-sig.js"></script>
     <script src="index.js">
