@@ -94,6 +94,7 @@ function fill (fields) {
     const el = document.querySelector('#' + id);
     if (el) el.value = fields[id];
   });
+  detectAlgFromProof();
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +604,52 @@ $('#verify')[0].onclick = async function (evt) {
 // Key bindings  C-Enter=sign  C-↓=copyDown  C-\=verify
 // ---------------------------------------------------------------------------
 $('#verifyMe')[0].addEventListener('input', () => setVerifyState(null));
+
+// Eagerly detect and display the algorithm from the withProof type triple.
+async function detectAlgFromProof() {
+  const sigKindVal = $('#sigKind')[0].value;
+  if (sigKindVal === 'fhirProvenance' || sigKindVal === 'fhirBundle') {
+    $('#detectedAlg')[0].textContent = '';
+    return;
+  }
+  const proofText = $('#withProof')[0].value.trim();
+  const proofNodeText = $('#proofNode')[0].value.trim();
+  if (!proofText || !proofNodeText) {
+    $('#detectedAlg')[0].textContent = '';
+    return;
+  }
+  try {
+    const withProof = await parse('ttl', proofText);
+    const proofNode = parseNode(proofNodeText);
+    const { proofType, alg } = getProofTypeInfo(withProof.data, proofNode);
+    $('#detectedAlg')[0].textContent =
+      `detected: ${proofType.replace(NS.sec, 'sec:')} → alg: ${alg}`;
+  } catch (_) {
+    $('#detectedAlg')[0].textContent = '';
+  }
+}
+['#withProof', '#proofNode', '#sigKind'].forEach(sel =>
+  $(sel)[0].addEventListener('input', detectAlgFromProof));
+
+// ---------------------------------------------------------------------------
+// Theme toggle
+// ---------------------------------------------------------------------------
+(function () {
+  const btn = $('#themeToggle')[0];
+  function applyTheme(dark) {
+    if (dark) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      btn.textContent = '☀';
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+      btn.textContent = '🌙';
+    }
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
+  }
+  applyTheme(document.documentElement.getAttribute('data-theme') === 'dark');
+  btn.addEventListener('click', () =>
+    applyTheme(document.documentElement.getAttribute('data-theme') !== 'dark'));
+})();
 
 document.addEventListener('keydown', function (evt) {
   if (!evt.ctrlKey) return;

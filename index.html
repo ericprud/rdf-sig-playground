@@ -1,10 +1,38 @@
 <html>
   <head>
     <title>RDF Signature Playground</title>
+    <script>
+      /* Restore saved theme before first paint to prevent flash */
+      if (localStorage.getItem('theme') === 'dark')
+        document.documentElement.setAttribute('data-theme', 'dark');
+    </script>
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+      /* ── Light mode (default) ──────────────────────────── */
       :root {
+        --bg:        #f6f8fa;
+        --surface:   #ffffff;
+        --surface2:  #eaeef2;
+        --border:    #d0d7de;
+        --border-hi: #8c959f;
+        --text:      #1f2328;
+        --muted:     #636c76;
+        --pick:      #1976d2;
+        --btn-fg:    #ffffff;
+        --input:     #1976d2;
+        --copySigned:#0891b2;
+        --toVerify:  #6b7280;
+        --verify:    #b45309;
+        --verified:  #16a34a;
+        --failed:    #dc2626;
+        --mono: 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, 'Courier New', monospace;
+        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        --r: 6px;
+      }
+
+      /* ── Dark mode ─────────────────────────────────────── */
+      html[data-theme="dark"] {
         --bg:        #0d1117;
         --surface:   #161b22;
         --surface2:  #21262d;
@@ -13,15 +41,13 @@
         --text:      #e6edf3;
         --muted:     #7d8590;
         --pick:      #c8f1f9;
+        --btn-fg:    #0d1117;
         --input:     #58a6ff;
         --copySigned:#7cdcdf;
         --toVerify:  #eeeeee;
         --verify:    #fcfcaf;
         --verified:  #3fb950;
         --failed:    #f85149;
-        --mono: 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, 'Courier New', monospace;
-        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-        --r: 6px;
       }
 
       body {
@@ -51,6 +77,18 @@
         white-space: nowrap;
       }
       #topbar h1 span { color: var(--muted); font-weight: 400; }
+      #themeToggle {
+        padding: 4px 10px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 20px;
+        font-size: 14px;
+        cursor: pointer;
+        transition: background .15s, border-color .15s;
+        line-height: 1;
+      }
+      #themeToggle:hover { background: var(--border); border-color: var(--border-hi); }
       #manifest {
         display: flex;
         gap: 6px;
@@ -85,9 +123,9 @@
         border-radius: 3px;
         background: var(--border);
       }
-      .stage-line.input  { background: var(--input); }
-      .stage-line.copySigned   { background: var(--copySigned); }
-      .stage-line.toVerify { background: var(--toVerify); }
+      .stage-line.input      { background: var(--input); }
+      .stage-line.copySigned { background: var(--copySigned); }
+      .stage-line.toVerify   { background: var(--toVerify); }
       .stage-body { min-width: 0; }
 
       /* ── Section headings ──────────────────────────────── */
@@ -102,7 +140,6 @@
         align-items: center;
         gap: 8px;
       }
-      .sh .note { font-weight: 400; text-transform: none; letter-spacing: 0; }
 
       /* ── Form fields ───────────────────────────────────── */
       input, select, textarea {
@@ -189,10 +226,11 @@
         font-weight: 600;
         font-family: var(--sans);
         cursor: pointer;
-        transition: filter .15s, opacity .15s;
+        transition: filter .15s;
         white-space: nowrap;
+        color: var(--btn-fg);
       }
-      button.action:hover { filter: brightness(1.18); }
+      button.action:hover  { filter: brightness(1.12); }
       button.action:active { filter: brightness(.9); }
       .kbd {
         font-size: 11px;
@@ -200,9 +238,9 @@
         opacity: .65;
         font-family: var(--mono);
       }
-      #sign     { background: var(--input);  color: #0d1117; }
-      #copyDown { background: var(--copySigned);   color: #0d1117; }
-      #verify   { background: var(--verify); color: #0d1117; }
+      #sign     { background: var(--input); }
+      #copyDown { background: var(--copySigned); }
+      #verify   { background: var(--verify); }
 
       /* Verification state — driven by body class, applies to all --toVerify elements */
       body.state-verified .stage-line.toVerify { background: var(--verified); }
@@ -245,7 +283,6 @@
         color: var(--copySigned);
         cursor: default;
         font-size: 13px;
-        text-decoration: none;
       }
 
       /* ── README ────────────────────────────────────────── */
@@ -262,6 +299,7 @@
     <!-- ── Top bar ───────────────────────────────────────── -->
     <div id="topbar">
       <h1>RDF Signature Playground <span>· linked-data proofs in the browser</span></h1>
+      <button id="themeToggle" title="Toggle light/dark mode">🌙</button>
       <div id="manifest"></div>
     </div>
 
