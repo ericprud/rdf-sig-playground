@@ -1,75 +1,398 @@
 <html>
   <head>
-    <title>RDF Signature Example</title>
+    <title>RDF Signature Playground</title>
     <style>
-      button { background-color: lightgreen; }
-      .failed { background-color: tomato; }
-      #manifest button { margin: 0 .5ex; }
-      .fake-link {
-          color: blue;
-          /*text-decoration: underline;*/
-          cursor: pointer;
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+      :root {
+        --bg:        #0d1117;
+        --surface:   #161b22;
+        --surface2:  #21262d;
+        --border:    #30363d;
+        --border-hi: #484f58;
+        --text:      #e6edf3;
+        --muted:     #7d8590;
+        --pick:      #c8f1f9;
+        --input:     #58a6ff;
+        --copySigned:#7cdcdf;
+        --toVerify:  #eeeeee;
+        --verify:    #fcfcaf;
+        --verified:  #3fb950;
+        --failed:    #f85149;
+        --mono: 'Cascadia Code', 'Fira Code', 'SF Mono', Consolas, 'Courier New', monospace;
+        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        --r: 6px;
       }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+        line-height: 1.5;
+        padding: 24px 28px;
+        min-height: 100vh;
+      }
+
+      /* ── Top bar ───────────────────────────────────────── */
+      #topbar {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding-bottom: 18px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 28px;
+        flex-wrap: wrap;
+      }
+      #topbar h1 {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+      #topbar h1 span { color: var(--muted); font-weight: 400; }
+      #manifest {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-left: auto;
+      }
+      #manifest button {
+        padding: 4px 12px;
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        color: var(--pick);
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: color .15s, border-color .15s, background .15s;
+      }
+      #manifest button:hover {
+        background: var(--border);
+        border-color: var(--border-hi);
+        color: var(--text);
+      }
+
+      /* ── Pipeline layout ───────────────────────────────── */
+      .stage {
+        display: grid;
+        grid-template-columns: 3px 1fr;
+        gap: 0 16px;
+        margin-bottom: 22px;
+      }
+      .stage-line {
+        border-radius: 3px;
+        background: var(--border);
+      }
+      .stage-line.input  { background: var(--input); }
+      .stage-line.copySigned   { background: var(--copySigned); }
+      .stage-line.toVerify { background: var(--toVerify); }
+      .stage-body { min-width: 0; }
+
+      /* ── Section headings ──────────────────────────────── */
+      .sh {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .08em;
+        color: var(--muted);
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .sh .note { font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+      /* ── Form fields ───────────────────────────────────── */
+      input, select, textarea {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: var(--r);
+        padding: 6px 10px;
+        font-size: 13px;
+        font-family: var(--mono);
+        outline: none;
+        transition: border-color .15s, box-shadow .15s;
+      }
+      input:focus, select:focus, textarea:focus {
+        border-color: var(--copySigned);
+        box-shadow: 0 0 0 3px rgba(88,166,255,.12);
+      }
+      textarea { resize: vertical; width: 100%; display: block; }
+      select { cursor: pointer; }
+      select option { background: var(--surface2); }
+
+      /* ── Control row ───────────────────────────────────── */
+      .ctrl {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .ctrl label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      #sigKind { flex: 0 1 190px; }
+      #alg     { width: 72px; }
+      #signNode, #proofNode { flex: 1; min-width: 200px; }
+
+      /* ── Key rows ──────────────────────────────────────── */
+      .key-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+      }
+      .key-row:last-child { margin-bottom: 0; }
+      .key-row label {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .06em;
+        color: var(--muted);
+        white-space: nowrap;
+        width: 52px;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .key-row textarea {
+        flex: 1;
+        resize: none;
+        padding: 6px 10px;
+        font-size: 12px;
+      }
+
+      /* ── Action buttons ────────────────────────────────── */
+      .action-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      button.action {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 16px;
+        border: none;
+        border-radius: var(--r);
+        font-size: 13px;
+        font-weight: 600;
+        font-family: var(--sans);
+        cursor: pointer;
+        transition: filter .15s, opacity .15s;
+        white-space: nowrap;
+      }
+      button.action:hover { filter: brightness(1.18); }
+      button.action:active { filter: brightness(.9); }
+      .kbd {
+        font-size: 11px;
+        font-weight: 400;
+        opacity: .65;
+        font-family: var(--mono);
+      }
+      #sign     { background: var(--input);  color: #0d1117; }
+      #copyDown { background: var(--copySigned);   color: #0d1117; }
+      #verify   { background: var(--verify); color: #0d1117; }
+
+      /* Verification state — driven by body class, applies to all --toVerify elements */
+      body.state-verified .stage-line.toVerify { background: var(--verified); }
+      body.state-verified #verify              { background: var(--verified); }
+      body.state-failed   .stage-line.toVerify { background: var(--failed); }
+      body.state-failed   #verify              { background: var(--failed); color: #fff; }
+
+      #detectedAlg {
+        font-size: 12px;
+        font-style: italic;
+        color: var(--muted);
+        font-family: var(--mono);
+      }
+
+      /* ── Result row ────────────────────────────────────── */
+      .result-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .result-row input { flex: 1; }
+
+      /* ── Proof metadata ────────────────────────────────── */
+      #proofMeta {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+        padding: 10px 14px;
+        font-size: 12px;
+        font-family: var(--mono);
+        color: var(--muted);
+        white-space: pre;
+        display: none;
+      }
+      #proofMeta:not(:empty) { display: block; }
+
+      /* ── Tooltip ───────────────────────────────────────── */
+      .tip {
+        color: var(--copySigned);
+        cursor: default;
+        font-size: 13px;
+        text-decoration: none;
+      }
+
+      /* ── README ────────────────────────────────────────── */
+      hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+      .readme { color: var(--muted); font-size: 13px; max-width: 680px; }
+      .readme h2 { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+      .readme p  { margin-bottom: 10px; line-height: 1.7; }
+      .readme a  { color: var(--copySigned); text-decoration: none; }
+      .readme a:hover { text-decoration: underline; }
     </style>
   </head>
   <body>
-    <div id="manifest">
-      <h1 style="display:inline">RDF Signature Example</h1>
-      <span>(with CSS from the 90s)</span>
+
+    <!-- ── Top bar ───────────────────────────────────────── -->
+    <div id="topbar">
+      <h1>RDF Signature Playground <span>· linked-data proofs in the browser</span></h1>
+      <div id="manifest"></div>
     </div>
-    <div style="padding: 3ex 0;">
-      Use <h2 style="display: inline;">Use</h2>
-      <select id="sigKind"><option value="">- pick one -</option><option value="jws">jws</option><option value="proofValue">proofValue</option><option value="fhirProvenance">co-signing Provenance</option><option value="fhirBundle">directly-signed Bundle</option></select>
-      <label for="alg" style="margin-left:1ex;">alg:</label>
-      <input id="alg" style="width:7ex;"></input>
-      <h2 style="display: inline;">to sign</h2>
-      <input id="signNode" style="width: 32ex;"></input>
-      <h2 style="display: inline;">in:</h2>
+
+    <!-- ── What to sign ──────────────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line input"></div>
+      <div class="stage-body">
+        <div class="sh">Sign input</div>
+        <div class="ctrl">
+          <label for="sigKind">Scheme</label>
+          <select id="sigKind">
+            <option value="">— pick one —</option>
+            <option value="jws">jws</option>
+            <option value="proofValue">proofValue</option>
+            <option value="fhirProvenance">co-signing Provenance</option>
+            <option value="fhirBundle">directly-signed Bundle</option>
+          </select>
+          <label for="alg">Alg</label>
+          <input id="alg">
+          <label for="signNode">Sign node</label>
+          <input id="signNode">
+        </div>
+        <textarea id="signGraph" rows="8"></textarea>
+      </div>
     </div>
-    <textarea id="signGraph" cols=132, rows=8></textarea>
-    <div style="padding: 3ex 0;">
-      <h2 style="display: inline;">with proof/signature root</h2>
-      <input id="proofNode" style="width: 32ex;"></input>
-      <span class="fake-link" title="jws/proofValue: replaced with a fresh bnode; fhir*: URI of resource carrying fhir:signature">†</span>
-      <h2 style="display: inline;">in:</h2>
+
+    <!-- ── Proof template ────────────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line input"></div>
+      <div class="stage-body">
+        <div class="sh">
+          Proof template
+          <span class="tip" title="jws/proofValue: replaced with a fresh bnode; fhir*: URI of resource carrying fhir:signature">†</span>
+        </div>
+        <div class="ctrl">
+          <label for="proofNode">Root</label>
+          <input id="proofNode">
+        </div>
+        <textarea id="withProof" rows="8"></textarea>
+      </div>
     </div>
-    <textarea id="withProof" cols=132, rows=8></textarea>
-    <h2>and private key:</h2>
-    <label for="keyId" style="padding-left: 8em;">keyId:</label> <textarea id="keyId" cols=100, rows=1></textarea><br/>
-    <label for="privKey" style="padding-left: 8em;">Base58:</label> <textarea id="privKey" cols=100, rows=1></textarea>
-    <div style="padding: 3ex 0;">
-      <button id="sign">sign ^↵</button>
-      <span id="detectedAlg" style="margin-left: 2ex; color: #555; font-style: italic;"></span>
-      <h2 style="display: inline;">produces:</h2>
+
+    <!-- ── Private key ────────────────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line input"></div>
+      <div class="stage-body">
+        <div class="sh">Private key</div>
+        <div class="key-row">
+          <label for="keyId">keyId</label>
+          <textarea id="keyId" rows="1"></textarea>
+        </div>
+        <div class="key-row">
+          <label for="privKey">Base58</label>
+          <textarea id="privKey" rows="1"></textarea>
+        </div>
+      </div>
     </div>
-    <textarea id="signed" cols=132, rows=15></textarea>
-    <br/>
-    <button id="copyDown">copy to signed graph ^↓</button>
-    <h2>test signed graph:</h2>
-    <textarea id="verifyMe" cols=132, rows=10></textarea>
-    <h2>with public key:</h2>
-    <textarea id="pubKey" cols=132, rows=1></textarea>
-    <p>
-      <button id="verify">verify ^\</button> <input id="result" style="width: 100ex;"></input>
-    </p>
-    <pre id="proofMeta" style="margin: 0 0 1ex 2ex; color: #555; font-size: 0.9em;"></pre>
+
+    <!-- ── Sign action + output ───────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line input"></div>
+      <div class="stage-body">
+        <div class="action-row">
+          <button id="sign" class="action">sign <span class="kbd">^↵</span></button>
+          <span id="detectedAlg"></span>
+          <span class="sh" style="margin:0;">Signed output</span>
+        </div>
+        <textarea id="signed" rows="15"></textarea>
+      </div>
+    </div>
+
+    <!-- ── Copy down ─────────────────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line copySigned"></div>
+      <div class="stage-body" style="padding: 4px 0;">
+        <button id="copyDown" class="action">copy to signed graph <span class="kbd">^↓</span></button>
+      </div>
+    </div>
+
+    <!-- ── Signed graph to verify ────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line toVerify"></div>
+      <div class="stage-body">
+        <div class="sh">Signed graph to verify</div>
+        <textarea id="verifyMe" rows="10"></textarea>
+      </div>
+    </div>
+
+    <!-- ── Public key ────────────────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line toVerify"></div>
+      <div class="stage-body">
+        <div class="sh">Public key</div>
+        <div class="key-row">
+          <label for="pubKey">Base58</label>
+          <textarea id="pubKey" rows="1"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Verify action + result ────────────────────────── -->
+    <div class="stage">
+      <div class="stage-line toVerify"></div>
+      <div class="stage-body">
+        <div class="result-row">
+          <button id="verify" class="action">verify <span class="kbd">^\</span></button>
+          <input id="result">
+        </div>
+        <pre id="proofMeta"></pre>
+      </div>
+    </div>
+
     <hr/>
-    <h1>README</h1>
-    <p>
-      This demonstrates an RDF-only uses of signatures.
-      The idea is to provide a doc to sign, a proof structure, and a private key to produce a signed doc.
-      Below, you can check that signed doc against a supplied public key.
-    </p>
-    <p>
-      You can follow the process in the comfort of your own browser.
-      Both the sign and verfiy button actions start with a call to a debugger, so you don't have to screw around looking for the source.
-    </p>
-    <p>
-      PRs, issues and advice welcome.
-      See the <a href="https://github.com/ericprud/rdf-sig-playground/blob/main/index.js">main source</a> and the <a href="https://github.com/ericprud/rdf-sig-playground/blob/main/package.json">supporting libraries</a>.
-    </p>
+
+    <div class="readme">
+      <h2>README</h2>
+      <p>
+        This demonstrates RDF-only uses of signatures.
+        Provide a document to sign, a proof structure, and a private key to produce a signed document.
+        Verify the signed document against a public key below.
+      </p>
+      <p>
+        Both the sign and verify button actions start with a call to a <code style="font-family:var(--mono);color:var(--verify);">debugger</code>, so you can follow the process step by step in DevTools.
+      </p>
+      <p>
+        PRs, issues and advice welcome.
+        See the <a href="https://github.com/ericprud/rdf-sig-playground/blob/main/index.js">main source</a> and the <a href="https://github.com/ericprud/rdf-sig-playground/blob/main/package.json">supporting libraries</a>.
+      </p>
+    </div>
+
     <script src="rdf-sig.js"></script>
-    <script src="index.js">
-    </script>
+    <script src="index.js"></script>
   </body>
 </html>

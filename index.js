@@ -76,10 +76,15 @@ const ClearFrom = {
   copyDown: Fields.indexOf('#verifyMe'),
   verify:   Fields.indexOf('#result'),
 };
+function setVerifyState(state) {
+  document.body.classList.remove('state-verified', 'state-failed');
+  if (state) document.body.classList.add('state-' + state);
+}
+
 function clearFrom (offset) {
   Fields.slice(offset).forEach(sel => { $(sel)[0].value = ''; });
   $('#proofMeta')[0].textContent = '';
-  $('#verify')[0].classList.remove('failed');
+  setVerifyState(null);
 }
 
 // Example button action.
@@ -591,13 +596,14 @@ $('#verify')[0].onclick = async function (evt) {
   } catch (e) {
     $('#result')[0].value = e.message;
   }
-  if ($('#result')[0].value !== 'true')
-    $('#verify')[0].classList.add('failed');
+  setVerifyState($('#result')[0].value === 'true' ? 'verified' : 'failed');
 }
 
 // ---------------------------------------------------------------------------
 // Key bindings  C-Enter=sign  C-↓=copyDown  C-\=verify
 // ---------------------------------------------------------------------------
+$('#verifyMe')[0].addEventListener('input', () => setVerifyState(null));
+
 document.addEventListener('keydown', function (evt) {
   if (!evt.ctrlKey) return;
   if (evt.key === 'Enter')     { evt.preventDefault(); $('#sign')[0].click(); }
