@@ -1,6 +1,6 @@
 const {Ed25519KeyPair, forge, jsonld, util, Buffer, jsYaml, base58, N3Writer, N3WriterWrapper} = rdfsig;
 const $ = document.querySelectorAll.bind(document);
-const DefaultManifest = ['examples/toy.yaml'];
+const DEFAULT_MANIFEST = 'examples/manifest.yaml';
 const F = graphy.core.data.factory;
 
 const NS = {
@@ -36,29 +36,42 @@ let algOptions = []; // populated when alg entries carry their own key fields
 const SearchParms = parseQueryString(window.location.search);
 console.log(`Page loaded at ${new Date().toISOString()} with search parms:\n${JSON.stringify(SearchParms, null, 2)}`);
 
+// Resolve manifest URLs from ?manifest= param; push default into history if absent.
+const manifestParams = new URLSearchParams(window.location.search).getAll('manifest');
+if (!manifestParams.length) {
+  const next = new URL(window.location.href);
+  next.searchParams.set('manifest', DEFAULT_MANIFEST);
+  history.pushState({}, '', next);
+  manifestParams.push(DEFAULT_MANIFEST);
+}
+
 // Paint example buttons.
 $('#signGraph')[0].value = ''; // clear out for error messages
-(SearchParms.manifestURL || DefaultManifest).forEach(async (m) => {
+manifestParams.forEach(async (m) => {
+  const url = new URL(m, window.location.href).href;
   let verb = 'load';
   try {
-    const resp = await fetch(m);
+    const resp = await fetch(url);
     if (!resp.ok)
-      throw Error(`fetch ${m} returned ${resp.status} ${resp.statusText}`);
+      throw Error(`fetch ${url} returned ${resp.status} ${resp.statusText}`);
     const text = await resp.text();
     verb = 'parse';
-    const manifest = m.endsWith('.yaml')
+    const manifest = url.endsWith('.yaml')
           ? jsYaml.load(text)
           : JSON.parse(text);
+    const link = document.createElement('a');
+    link.href = url; link.textContent = '🔗'; link.title = url; link.target = '_blank';
+    $('#manifest')[0].appendChild(link);
     Object.keys(manifest).forEach(label => {
       const elt = document.createElement('button');
-      elt.innerText = label
+      elt.innerText = label;
       elt.onclick = () => fill(manifest[label]);
       $('#manifest')[0].appendChild(elt);
-    })
+    });
   } catch (e) {
-    $('#signGraph')[0].value += `Failed to ${verb} ${m}: ${e.message}\n`;
+    $('#signGraph')[0].value += `Failed to ${verb} ${url}: ${e.message}\n`;
   }
-})
+});
 
 const Fields = [
   '#alg',        // 0  signing inputs
