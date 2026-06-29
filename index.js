@@ -12,9 +12,10 @@ const NS = {
 const RDF_TYPE = NS.rdf + 'type';
 
 const ProofTypeInfo = {
-  [NS.sec + 'Ed25519Signature2018']: { keyClass: 'Ed25519', alg: 'EdDSA' },
-  [NS.sec + 'Ed25519Signature2020']: { keyClass: 'Ed25519', alg: 'EdDSA' },
-  [NS.sec + 'RsaSignature2018']:     { keyClass: 'RSA',     alg: 'RS256' },
+  [NS.sec + 'Ed25519Signature2018']:        { keyClass: 'Ed25519', alg: 'EdDSA' },
+  [NS.sec + 'Ed25519Signature2020']:        { keyClass: 'Ed25519', alg: 'EdDSA' },
+  [NS.sec + 'RsaSignature2018']:            { keyClass: 'RSA',     alg: 'RS256' },
+  [NS.sec + 'EcdsaSecp256r1Signature2019']: { keyClass: 'P256',    alg: 'ES256' },
 };
 
 const SigKinds = {
@@ -29,6 +30,8 @@ const SigKinds = {
     verify: verifyProofValue,
   },
 };
+
+let algOptions = []; // populated when alg entries carry their own key fields
 
 const SearchParms = parseQueryString(window.location.search);
 console.log(`Page loaded at ${new Date().toISOString()} with search parms:\n${JSON.stringify(SearchParms, null, 2)}`);
@@ -101,14 +104,39 @@ function fill (fields) {
 function fillAlg (alg) {
   const sel = $('#alg')[0];
   sel.innerHTML = '<option value="">— default —</option>';
-  const opts = Array.isArray(alg) ? alg : (alg ? [alg] : []);
-  opts.forEach(a => {
-    const opt = document.createElement('option');
-    opt.value = a; opt.textContent = a;
-    sel.appendChild(opt);
-  });
-  if (!Array.isArray(alg) && alg) sel.value = alg;
+  algOptions = [];
+  const items = Array.isArray(alg) ? alg : (alg ? [alg] : []);
+  if (items.length && typeof items[0] === 'object') {
+    algOptions = items;
+    items.forEach(entry => {
+      const opt = document.createElement('option');
+      opt.value = entry.name; opt.textContent = entry.name;
+      sel.appendChild(opt);
+    });
+    sel.value = items[0].name;
+    applyAlgKeys(items[0]);
+  } else {
+    items.forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a; opt.textContent = a;
+      sel.appendChild(opt);
+    });
+    if (!Array.isArray(alg) && alg) sel.value = alg;
+  }
 }
+
+function applyAlgKeys (entry) {
+  ['keyId', 'privKey', 'pubKey'].forEach(k => {
+    if (entry[k] !== undefined) $('#' + k)[0].value = entry[k];
+  });
+}
+
+$('#alg')[0].addEventListener('input', function () {
+  clearFrom(ClearFrom.sign);
+  if (!algOptions.length) return;
+  const entry = algOptions.find(o => o.name === this.value);
+  if (entry) applyAlgKeys(entry);
+});
 
 // ---------------------------------------------------------------------------
 // Linked-data proof helpers (jws / proofValue)
@@ -150,6 +178,55 @@ function makeRsaVerifier (pubKeyBase58) {
       try {
         return pubKey.verify(md.digest().bytes(), forge.util.binary.raw.encode(signature));
       } catch (e) { return false; }
+    }
+  };
+}
+
+// PS256 (RSA-PSS + SHA-256) — same base58 PKCS#1/SPKI key format as RS256.
+function makePssSigner (privKeyBase58) {
+  const privKey = forge.pki.privateKeyFromAsn1(
+    forge.asn1.fromDer(forge.util.createBuffer(base58.decode(privKeyBase58))));
+  return {
+    sign: async ({data}) => {
+      const pss = forge.pss.create({ md: forge.md.sha256.create(), mgf: forge.mgf.mgf1.create(forge.md.sha256.create()), saltLength: 32 });
+      const md = forge.md.sha256.create();
+      md.update(forge.util.binary.raw.encode(data), 'binary');
+      return forge.util.binary.raw.decode(privKey.sign(md, pss));
+    }
+  };
+}
+function makePssVerifier (pubKeyBase58) {
+  const pubKey = forge.pki.publicKeyFromAsn1(
+    forge.asn1.fromDer(forge.util.createBuffer(base58.decode(pubKeyBase58))));
+  return {
+    verify: async ({data, signature}) => {
+      const pss = forge.pss.create({ md: forge.md.sha256.create(), mgf: forge.mgf.mgf1.create(forge.md.sha256.create()), saltLength: 32 });
+      const md = forge.md.sha256.create();
+      md.update(forge.util.binary.raw.encode(data), 'binary');
+      try { return pubKey.verify(md.digest().bytes(), forge.util.binary.raw.encode(signature), pss); }
+      catch (e) { return false; }
+    }
+  };
+}
+
+// ES256 (P-256 ECDSA + SHA-256) — base58 of PKCS#8 DER (private) / SPKI DER (public).
+function b58ToDer (b58) {
+  return forge.util.binary.raw.decode(forge.util.createBuffer(base58.decode(b58)).getBytes());
+}
+function makeEcdsaSigner (privKeyBase58) {
+  return {
+    sign: async ({data}) => {
+      const key = await crypto.subtle.importKey('pkcs8', b58ToDer(privKeyBase58), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+      return new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, data));
+    }
+  };
+}
+function makeEcdsaVerifier (pubKeyBase58) {
+  return {
+    verify: async ({data, signature}) => {
+      const key = await crypto.subtle.importKey('spki', b58ToDer(pubKeyBase58), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      try { return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, signature, data); }
+      catch (e) { return false; }
     }
   };
 }
@@ -294,6 +371,10 @@ async function signFhir (vals) {
   if (alg === 'EdDSA') {
     const keyPair = await Ed25519KeyPair.generate({ privateKeyBase58: vals.privKey });
     signer = keyPair.signer();
+  } else if (alg === 'PS256') {
+    signer = makePssSigner(vals.privKey);
+  } else if (alg === 'ES256') {
+    signer = makeEcdsaSigner(vals.privKey);
   } else {
     signer = makeRsaSigner(vals.privKey);
   }
@@ -444,11 +525,12 @@ async function verifyFhir (vals) {
 
   let verifier;
   if (jwsAlg === 'EdDSA') {
-    const keyPair = await Ed25519KeyPair.generate({
-      id: vals.keyId,
-      publicKeyBase58: vals.pubKey,
-    });
+    const keyPair = await Ed25519KeyPair.generate({ id: vals.keyId, publicKeyBase58: vals.pubKey });
     verifier = keyPair.verifier();
+  } else if (jwsAlg === 'PS256') {
+    verifier = makePssVerifier(vals.pubKey);
+  } else if (jwsAlg === 'ES256') {
+    verifier = makeEcdsaVerifier(vals.pubKey);
   } else {
     verifier = makeRsaVerifier(vals.pubKey);
   }
@@ -516,6 +598,8 @@ $('#sign')[0].onclick = async function (evt) {
       signer = keyPair.signer();
     } else if (keyClass === 'RSA') {
       signer = makeRsaSigner(vals.privKey);
+    } else if (keyClass === 'P256') {
+      signer = makeEcdsaSigner(vals.privKey);
     } else {
       throw Error(`Unsupported key class: ${keyClass}`);
     }
@@ -623,13 +707,12 @@ $('#verify')[0].onclick = async function (evt) {
     // Construct public key verifier.
     let verifier;
     if (keyClass === 'Ed25519') {
-      const keyPair = await Ed25519KeyPair.generate({
-        id: vals.keyId,
-        publicKeyBase58: vals.pubKey,
-      });
+      const keyPair = await Ed25519KeyPair.generate({ id: vals.keyId, publicKeyBase58: vals.pubKey });
       verifier = keyPair.verifier();
     } else if (keyClass === 'RSA') {
       verifier = makeRsaVerifier(vals.pubKey);
+    } else if (keyClass === 'P256') {
+      verifier = makeEcdsaVerifier(vals.pubKey);
     } else {
       throw Error(`Unsupported key class: ${keyClass}`);
     }
