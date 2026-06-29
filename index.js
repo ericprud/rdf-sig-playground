@@ -91,10 +91,23 @@ function clearFrom (offset) {
 function fill (fields) {
   clearFrom(ClearFrom.fill);
   Object.keys(fields).forEach(id => {
+    if (id === 'alg') { fillAlg(fields.alg); return; }
     const el = document.querySelector('#' + id);
     if (el) el.value = fields[id];
   });
   detectAlgFromProof();
+}
+
+function fillAlg (alg) {
+  const sel = $('#alg')[0];
+  sel.innerHTML = '<option value="">— default —</option>';
+  const opts = Array.isArray(alg) ? alg : (alg ? [alg] : []);
+  opts.forEach(a => {
+    const opt = document.createElement('option');
+    opt.value = a; opt.textContent = a;
+    sel.appendChild(opt);
+  });
+  if (!Array.isArray(alg) && alg) sel.value = alg;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +152,12 @@ function makeRsaVerifier (pubKeyBase58) {
       } catch (e) { return false; }
     }
   };
+}
+
+function decodeJwsHeader (token) {
+  try {
+    return JSON.parse(util.decodeBase64UrlToString(token.split('.')[0]));
+  } catch (_) { return null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +290,13 @@ async function signFhir (vals) {
   const alg = vals.alg || 'RS256';
 
   // Only signGraph is signed — withProof (Provenance metadata or sig metadata) is not.
-  const signer = makeRsaSigner(vals.privKey);
+  let signer;
+  if (alg === 'EdDSA') {
+    const keyPair = await Ed25519KeyPair.generate({ privateKeyBase58: vals.privKey });
+    signer = keyPair.signer();
+  } else {
+    signer = makeRsaSigner(vals.privKey);
+  }
   const verifyData = await urdnaizeDocs([
     await write('nt', [...signGraph.data.quads()]),
   ]);
@@ -343,7 +368,7 @@ async function verifyFhir (vals) {
   const signNode = parseNode(vals.signNode);
   const alg = vals.alg || 'RS256';
 
-  let token, meta;
+  let token, meta, jwsAlg;
 
   if (vals.sigKind === 'fhirBundle') {
     // Extract token and strip fhir:signature subgraph from Bundle.
@@ -414,13 +439,26 @@ async function verifyFhir (vals) {
     extractSubgraph(verifyGraph.data, provNode); // strip Provenance and all its blank nodes
   }
 
-  const verifier = makeRsaVerifier(vals.pubKey);
+  jwsAlg = decodeJwsHeader(token)?.alg || alg;
+  meta.alg = jwsAlg;
+
+  let verifier;
+  if (jwsAlg === 'EdDSA') {
+    const keyPair = await Ed25519KeyPair.generate({
+      id: vals.keyId,
+      publicKeyBase58: vals.pubKey,
+    });
+    verifier = keyPair.verifier();
+  } else {
+    verifier = makeRsaVerifier(vals.pubKey);
+  }
+
   const verifyData = await urdnaizeDocs([
     await write('nt', [...verifyGraph.data.quads()]),
   ]);
   const verified = await verifyJwsToken(token, verifyData, verifier);
   $('#result')[0].value = verified;
-  $('#detectedAlg')[0].textContent = `${vals.sigKind} → alg: ${alg}`;
+  $('#detectedAlg')[0].textContent = `${vals.sigKind} → alg: ${jwsAlg}`;
   return meta;
 }
 
@@ -447,6 +485,13 @@ $('#sign')[0].onclick = async function (evt) {
     ]);
     const signNode = parseNode(vals.signNode);
     const proofNode = parseNode(vals.proofNode);
+
+    // Apply proof-type override from #alg select.
+    if (vals.alg && ProofTypeInfo[NS.sec + vals.alg]) {
+      const typeQs = [...withProof.data.match(proofNode, F.namedNode(RDF_TYPE), null)];
+      typeQs.forEach(q => withProof.data.delete(q));
+      withProof.data.add(F.quad(proofNode, F.namedNode(RDF_TYPE), F.namedNode(NS.sec + vals.alg)));
+    }
 
     // Detect key class and JWS algorithm from proof type.
     const { proofType, keyClass, alg } = getProofTypeInfo(withProof.data, proofNode);
@@ -570,6 +615,10 @@ $('#verify')[0].onclick = async function (evt) {
     $('#detectedAlg')[0].textContent =
       `detected: ${proofType.replace(NS.sec, 'sec:')} → alg: ${alg}`;
     const meta = extractSignMeta(vals.sigKind, anonymousProof, embeddedProofNode);
+    if (vals.sigKind === 'jws') {
+      const jwsAlg = decodeJwsHeader(signature)?.alg;
+      if (jwsAlg) meta.alg = jwsAlg;
+    }
 
     // Construct public key verifier.
     let verifier;
@@ -608,8 +657,15 @@ $('#verifyMe')[0].addEventListener('input', () => setVerifyState(null));
 // Eagerly detect and display the algorithm from the withProof type triple.
 async function detectAlgFromProof() {
   const sigKindVal = $('#sigKind')[0].value;
+  const algOverride = $('#alg')[0].value;
   if (sigKindVal === 'fhirProvenance' || sigKindVal === 'fhirBundle') {
-    $('#detectedAlg')[0].textContent = '';
+    $('#detectedAlg')[0].textContent = algOverride ? `alg: ${algOverride}` : '';
+    return;
+  }
+  // For jws/proofValue: if alg select has a known proof-type value, show override.
+  if (algOverride && ProofTypeInfo[NS.sec + algOverride]) {
+    const info = ProofTypeInfo[NS.sec + algOverride];
+    $('#detectedAlg')[0].textContent = `override: sec:${algOverride} → alg: ${info.alg}`;
     return;
   }
   const proofText = $('#withProof')[0].value.trim();
@@ -628,7 +684,7 @@ async function detectAlgFromProof() {
     $('#detectedAlg')[0].textContent = '';
   }
 }
-['#withProof', '#proofNode', '#sigKind'].forEach(sel =>
+['#withProof', '#proofNode', '#sigKind', '#alg'].forEach(sel =>
   $(sel)[0].addEventListener('input', detectAlgFromProof));
 
 // ---------------------------------------------------------------------------

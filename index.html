@@ -178,7 +178,7 @@
         white-space: nowrap;
       }
       #sigKind { flex: 0 1 190px; }
-      #alg     { width: 72px; }
+      #alg     { min-width: 72px; }
       #signNode, #proofNode { flex: 1; min-width: 200px; }
 
       /* ── Key rows ──────────────────────────────────────── */
@@ -318,7 +318,7 @@
             <option value="fhirBundle">directly-signed Bundle</option>
           </select>
           <label for="alg">Alg</label>
-          <input id="alg">
+          <select id="alg"><option value="">— default —</option></select>
           <label for="signNode">Sign node</label>
           <input id="signNode">
         </div>
